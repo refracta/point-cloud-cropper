@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Point Cloud Cropper</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        background: #0b0c10;
+        color: #e6e6e6;
+      }
+      #layout {
+        display: flex;
+        height: 100%;
+        width: 100%;
+      }
+      #viewport-container {
+        position: relative;
+        flex: 1 1 auto;
+        background: #000;
+        overflow: hidden;
+      }
+      #viewport {
+        width: 100%;
+        height: 100%;
+      }
+      #drop-hint {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-size: 15px;
+        color: #d0d7de;
+        pointer-events: none;
+        opacity: 0.8;
+      }
+      #drop-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(67, 160, 255, 0.18);
+        border: 2px dashed rgba(138, 180, 255, 0.9);
+        border-radius: 8px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: #e6f1ff;
+        font-size: 16px;
+        font-weight: 500;
+        pointer-events: none;
+        box-shadow: 0 0 0 1px rgba(17, 25, 40, 0.6);
+      }
+      #sidebar {
+        width: 320px;
+        max-width: 40vw;
+        background: rgba(17, 25, 40, 0.96);
+        border-left: 1px solid rgba(148, 163, 184, 0.32);
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
+        padding: 14px 16px 18px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #sidebar h1 {
+        font-size: 16px;
+        margin: 0 0 4px;
+        font-weight: 600;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        color: #e5e9f0;
+      }
+      #sidebar .subtitle {
+        font-size: 11px;
+        color: #9ca3af;
+        margin-bottom: 6px;
+      }
+      .section {
+        border-radius: 8px;
+        background: radial-gradient(circle at top left, rgba(148, 163, 255, 0.12), rgba(15, 23, 42, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        padding: 8px 9px 9px;
+        margin-bottom: 6px;
+      }
+      .section-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 4px;
+      }
+      .section-title {
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: .03em;
+        text-transform: uppercase;
+        color: #e5e7eb;
+      }
+      .section-note {
+        font-size: 10px;
+        color: #9ca3af;
+      }
+      .field-row {
+        display: grid;
+        grid-template-columns: 1.2fr 2.2fr 0.9fr;
+        gap: 6px;
+        align-items: center;
+        margin: 4px 0;
+      }
+      .field-row-compact {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        align-items: center;
+        margin: 3px 0;
+      }
+      label {
+        font-size: 11px;
+        color: #d1d5db;
+      }
+      input[type="range"] {
+        width: 100%;
+      }
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 2px 4px;
+        border-radius: 4px;
+        border: 1px solid rgba(148, 163, 184, 0.7);
+        background: rgba(15, 23, 42, 0.9);
+        color: #e5e7eb;
+        font-size: 11px;
+      }
+      input[type="number"]:focus {
+        outline: none;
+        border-color: #60a5fa;
+        box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.5);
+      }
+      .value-label {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        color: #a5b4fc;
+      }
+      .stat-line {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin: 2px 0;
+        color: #d1d5db;
+      }
+      .stat-line span.value {
+        color: #bfdbfe;
+        font-variant-numeric: tabular-nums;
+      }
+      button {
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        border: none;
+        cursor: pointer;
+        background: linear-gradient(135deg, #2563eb, #4f46e5);
+        color: #e5e7eb;
+        font-weight: 500;
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.45);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      button.secondary {
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(148, 163, 184, 0.7);
+        box-shadow: none;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+        box-shadow: none;
+      }
+      #footer-note {
+        margin-top: auto;
+        font-size: 10px;
+        color: #9ca3af;
+        line-height: 1.4;
+      }
+      #footer-note code {
+        font-size: 10px;
+        background: rgba(15, 23, 42, 0.9);
+        padding: 1px 4px;
+        border-radius: 4px;
+        border: 1px solid rgba(75, 85, 99, 0.8);
+      }
+      #info-banner {
+        position: absolute;
+        left: 10px;
+        top: 10px;
+        background: rgba(0, 0, 0, 0.5);
+        color: #e5e7eb;
+        font-size: 11px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #info-banner div {
+        margin: 1px 0;
+      }
+      @media (max-width: 880px) {
+        #layout {
+          flex-direction: column;
+        }
+        #sidebar {
+          width: 100%;
+          max-width: none;
+          border-left: none;
+          border-top: 1px solid rgba(148, 163, 184, 0.32);
+          box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.75);
+        }
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="layout">
+      <div id="viewport-container">
+        <div id="viewport"></div>
+        <div id="drop-hint">
+          여기로 포인트 클라우드 PLY 파일을<br />드래그 앤 드롭하세요.
+        </div>
+        <div id="drop-overlay">여기에 놓으면 로딩됩니다</div>
+        <div id="info-banner">
+          <div>마우스 좌클릭 드래그: 회전</div>
+          <div>휠: 줌 · 우클릭 드래그: 이동</div>
+          <div>평면 클릭 후 드래그: 크롭 박스 이동</div>
+        </div>
+      </div>
+      <div id="sidebar">
+        <h1>Point Cloud Cropper</h1>
+        <div class="subtitle">three.js 기반 PLY 크롭 도구</div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">파일</div>
+          </div>
+          <div class="stat-line">
+            <span>이름</span>
+            <span class="value" id="fileName">없음</span>
+          </div>
+          <div class="stat-line">
+            <span>포인트 수</span>
+            <span class="value" id="pointCount">-</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Point Size</div>
+            <div class="section-note">URL 파라미터: <code>ps</code></div>
+          </div>
+          <div class="field-row">
+            <label for="pointSizeRange">크기</label>
+            <input id="pointSizeRange" type="range" min="0.0001" max="10" step="0.0001" />
+            <div class="value-label" id="pointSizeLabel">-</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Crop Box</div>
+            <div class="section-note">URL 파라미터: <code>xmin..zmax</code>, <code>inv</code></div>
+          </div>
+          <div class="field-row-compact">
+            <label for="xminInput">X Min</label>
+            <input id="xminInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact">
+            <label for="xmaxInput">X Max</label>
+            <input id="xmaxInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact">
+            <label for="yminInput">Y Min</label>
+            <input id="yminInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact">
+            <label for="ymaxInput">Y Max</label>
+            <input id="ymaxInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact">
+            <label for="zminInput">Z Min</label>
+            <input id="zminInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact" style="margin-bottom: 6px;">
+            <label for="zmaxInput">Z Max</label>
+            <input id="zmaxInput" type="number" step="0.001" />
+          </div>
+          <div class="field-row-compact" style="margin-top: 2px;">
+            <label for="invertCrop">Invert Crop</label>
+            <input id="invertCrop" type="checkbox" />
+          </div>
+          <div style="display:flex; gap:6px; margin-top:4px;">
+            <button id="resetCropButton" class="secondary" disabled>전체 포함으로 리셋</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Export</div>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button id="downloadButton" disabled>다운로드: cropped PLY</button>
+            <button id="presetButton" class="secondary" disabled>preset.json 다운로드</button>
+          </div>
+        </div>
+
+        <div id="footer-note">
+          - 평면 6개는 포인트 클라우드 전체를 포함하는 최소 크기로 자동 설정됩니다.<br />
+          - 평면을 드래그하거나 우측 수치를 변경하면<br />
+          &nbsp;&nbsp;현재 <code>ps</code>, <code>xmin..zmax</code> 값이 URL 쿼리에 자동 반영됩니다.<br />
+          - 이 URL을 공유하면 동일한 설정으로 열 수 있습니다<br />
+          &nbsp;&nbsp;(포인트 클라우드는 동일한 파일을 다시 드롭해야 합니다).
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import * as THREE from 'three';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { TransformControls } from 'three/addons/controls/TransformControls.js';
+      import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+      const viewport = document.getElementById('viewport');
+      const dropHint = document.getElementById('drop-hint');
+      const dropOverlay = document.getElementById('drop-overlay');
+      const fileNameEl = document.getElementById('fileName');
+      const pointCountEl = document.getElementById('pointCount');
+      const pointSizeRange = document.getElementById('pointSizeRange');
+      const pointSizeLabel = document.getElementById('pointSizeLabel');
+      const resetCropButton = document.getElementById('resetCropButton');
+      const downloadButton = document.getElementById('downloadButton');
+      const presetButton = document.getElementById('presetButton');
+
+      const xminInput = document.getElementById('xminInput');
+      const xmaxInput = document.getElementById('xmaxInput');
+      const yminInput = document.getElementById('yminInput');
+      const ymaxInput = document.getElementById('ymaxInput');
+      const zminInput = document.getElementById('zminInput');
+      const zmaxInput = document.getElementById('zmaxInput');
+      const invertCropInput = document.getElementById('invertCrop');
+
+      const DEFAULT_POINT_SIZE = 2.0;
+
+      function readURLConfig() {
+        const q = new URLSearchParams(window.location.search);
+        const num = (k) => {
+          if (!q.has(k)) return undefined;
+          const v = parseFloat(q.get(k));
+          return Number.isFinite(v) ? v : undefined;
+        };
+        const cfg = {
+          pointSize: num('ps'),
+          crop: null,
+          invertCrop: undefined
+        };
+        const keys = ['xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax'];
+        const crop = {};
+        let allPresent = true;
+        for (const k of keys) {
+          const v = num(k);
+          if (v == null) {
+            allPresent = false;
+            break;
+          }
+          crop[k] = v;
+        }
+        if (allPresent) cfg.crop = crop;
+
+        if (q.has('inv')) {
+          const v = q.get('inv');
+          cfg.invertCrop = /^(1|true|on|yes)$/i.test(v);
+        }
+        return cfg;
+      }
+
+      const initialURL = readURLConfig();
+      const params = {
+        pointSize: initialURL.pointSize ?? DEFAULT_POINT_SIZE,
+        invertCrop: initialURL.invertCrop ?? false
+      };
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+
+      const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
+      camera.position.set(0, 0, 5);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      viewport.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.target.set(0, 0, 0);
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+      scene.add(ambient);
+      const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+      dir.position.set(3, 5, 4);
+      scene.add(dir);
+
+      const grid = new THREE.GridHelper(10, 20, 0x4b5563, 0x111827);
+      grid.position.y = -0.0001;
+      scene.add(grid);
+
+      const plyLoader = new PLYLoader();
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+
+      let pointCloud = null;
+      let pointGeometry = null;
+      let pointMaterial = null;
+      let sourceFileName = null;
+      let sourceBBox = null;
+      let hasPointColors = false;
+
+      const crop = {
+        xmin: null,
+        xmax: null,
+        ymin: null,
+        ymax: null,
+        zmin: null,
+        zmax: null
+      };
+      const cropPlanes = {};
+      let transformControls = null;
+      let hasAppliedInitialCropFromURL = false;
+
+      function resizeRenderer() {
+        const rect = viewport.getBoundingClientRect();
+        const width = rect.width || 1;
+        const height = rect.height || 1;
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+
+      window.addEventListener('resize', resizeRenderer);
+      resizeRenderer();
+
+      function updateURLFromState() {
+        const q = new URLSearchParams(window.location.search);
+
+        if (params.pointSize != null) {
+          q.set('ps', params.pointSize.toString());
+        }
+
+        if (params.invertCrop) {
+          q.set('inv', '1');
+        } else {
+          q.delete('inv');
+        }
+
+        if (crop.xmin != null && crop.xmax != null &&
+            crop.ymin != null && crop.ymax != null &&
+            crop.zmin != null && crop.zmax != null) {
+          q.set('xmin', crop.xmin.toFixed(4));
+          q.set('xmax', crop.xmax.toFixed(4));
+          q.set('ymin', crop.ymin.toFixed(4));
+          q.set('ymax', crop.ymax.toFixed(4));
+          q.set('zmin', crop.zmin.toFixed(4));
+          q.set('zmax', crop.zmax.toFixed(4));
+        }
+
+        const query = q.toString();
+        const url = window.location.pathname + (query ? '?' + query : '');
+        window.history.replaceState(null, '', url);
+      }
+
+      function clampCropToBBox() {
+        if (!sourceBBox) return;
+        const eps = 1e-5;
+        const min = sourceBBox.min;
+        const max = sourceBBox.max;
+
+        crop.xmin = Math.max(min.x, crop.xmin);
+        crop.xmax = Math.min(max.x, crop.xmax);
+        crop.ymin = Math.max(min.y, crop.ymin);
+        crop.ymax = Math.min(max.y, crop.ymax);
+        crop.zmin = Math.max(min.z, crop.zmin);
+        crop.zmax = Math.min(max.z, crop.zmax);
+
+        if (crop.xmax <= crop.xmin) crop.xmax = crop.xmin + eps;
+        if (crop.ymax <= crop.ymin) crop.ymax = crop.ymin + eps;
+        if (crop.zmax <= crop.zmin) crop.zmax = crop.zmin + eps;
+      }
+
+      function applyInitialCropFromURLIfAny() {
+        if (hasAppliedInitialCropFromURL) return;
+        if (!initialURL.crop) return;
+        if (!sourceBBox) return;
+
+        crop.xmin = initialURL.crop.xmin;
+        crop.xmax = initialURL.crop.xmax;
+        crop.ymin = initialURL.crop.ymin;
+        crop.ymax = initialURL.crop.ymax;
+        crop.zmin = initialURL.crop.zmin;
+        crop.zmax = initialURL.crop.zmax;
+        clampCropToBBox();
+        hasAppliedInitialCropFromURL = true;
+      }
+
+      function initCropFromBBox() {
+        if (!sourceBBox) return;
+
+        if (!hasAppliedInitialCropFromURL && initialURL.crop) {
+          applyInitialCropFromURLIfAny();
+        } else {
+          crop.xmin = sourceBBox.min.x;
+          crop.xmax = sourceBBox.max.x;
+          crop.ymin = sourceBBox.min.y;
+          crop.ymax = sourceBBox.max.y;
+          crop.zmin = sourceBBox.min.z;
+          crop.zmax = sourceBBox.max.z;
+        }
+
+        clampCropToBBox();
+        createCropPlanesIfNeeded();
+        updateCropPlanesFromState();
+        updateCropInputsFromState();
+        updateURLFromState();
+      }
+
+      function createCropPlanesIfNeeded() {
+        if (transformControls) return;
+
+        const planeGeo = new THREE.PlaneGeometry(1, 1);
+
+        function makeMaterial(color) {
+          return new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+        }
+
+        cropPlanes.xmin = new THREE.Mesh(planeGeo, makeMaterial(0xff5c5c));
+        cropPlanes.xmax = new THREE.Mesh(planeGeo, makeMaterial(0xff5c5c));
+        cropPlanes.ymin = new THREE.Mesh(planeGeo, makeMaterial(0x22c55e));
+        cropPlanes.ymax = new THREE.Mesh(planeGeo, makeMaterial(0x22c55e));
+        cropPlanes.zmin = new THREE.Mesh(planeGeo, makeMaterial(0x38bdf8));
+        cropPlanes.zmax = new THREE.Mesh(planeGeo, makeMaterial(0x38bdf8));
+
+        cropPlanes.xmin.userData.cropKey = 'xmin';
+        cropPlanes.xmax.userData.cropKey = 'xmax';
+        cropPlanes.ymin.userData.cropKey = 'ymin';
+        cropPlanes.ymax.userData.cropKey = 'ymax';
+        cropPlanes.zmin.userData.cropKey = 'zmin';
+        cropPlanes.zmax.userData.cropKey = 'zmax';
+
+        cropPlanes.xmin.rotation.y = Math.PI / 2;
+        cropPlanes.xmax.rotation.y = Math.PI / 2;
+        cropPlanes.ymin.rotation.x = -Math.PI / 2;
+        cropPlanes.ymax.rotation.x = -Math.PI / 2;
+
+        for (const key in cropPlanes) {
+          const mesh = cropPlanes[key];
+          mesh.name = 'CropPlane_' + key;
+          mesh.renderOrder = 1;
+          scene.add(mesh);
+        }
+
+        transformControls = new TransformControls(camera, renderer.domElement);
+        transformControls.setMode('translate');
+        transformControls.size = 0.8;
+        transformControls.addEventListener('dragging-changed', (event) => {
+          controls.enabled = !event.value;
+        });
+        transformControls.addEventListener('objectChange', () => {
+          const obj = transformControls.object;
+          if (!obj || !obj.userData || !obj.userData.cropKey) return;
+          const key = obj.userData.cropKey;
+          const p = obj.position;
+          const eps = 1e-5;
+          if (key === 'xmin') {
+            crop.xmin = p.x;
+            if (crop.xmin > crop.xmax - eps) crop.xmin = crop.xmax - eps;
+          } else if (key === 'xmax') {
+            crop.xmax = p.x;
+            if (crop.xmax < crop.xmin + eps) crop.xmax = crop.xmin + eps;
+          } else if (key === 'ymin') {
+            crop.ymin = p.y;
+            if (crop.ymin > crop.ymax - eps) crop.ymin = crop.ymax - eps;
+          } else if (key === 'ymax') {
+            crop.ymax = p.y;
+            if (crop.ymax < crop.ymin + eps) crop.ymax = crop.ymin + eps;
+          } else if (key === 'zmin') {
+            crop.zmin = p.z;
+            if (crop.zmin > crop.zmax - eps) crop.zmin = crop.zmax - eps;
+          } else if (key === 'zmax') {
+            crop.zmax = p.z;
+            if (crop.zmax < crop.zmin + eps) crop.zmax = crop.zmin + eps;
+          }
+          clampCropToBBox();
+          updateCropPlanesFromState();
+          updateCropInputsFromState();
+          updateURLFromState();
+        });
+        scene.add(transformControls);
+
+        renderer.domElement.addEventListener('pointerdown', onPointerDownForCropPlanes);
+      }
+
+      function updateCropPlanesFromState() {
+        if (!sourceBBox) return;
+
+        const cx = (crop.xmin + crop.xmax) / 2;
+        const cy = (crop.ymin + crop.ymax) / 2;
+        const cz = (crop.zmin + crop.zmax) / 2;
+        const sx = Math.max(crop.xmax - crop.xmin, 1e-4);
+        const sy = Math.max(crop.ymax - crop.ymin, 1e-4);
+        const sz = Math.max(crop.zmax - crop.zmin, 1e-4);
+
+        const p = cropPlanes;
+
+        if (!p.xmin) return;
+
+        p.xmin.position.set(crop.xmin, cy, cz);
+        p.xmax.position.set(crop.xmax, cy, cz);
+        p.ymin.position.set(cx, crop.ymin, cz);
+        p.ymax.position.set(cx, crop.ymax, cz);
+        p.zmin.position.set(cx, cy, crop.zmin);
+        p.zmax.position.set(cx, cy, crop.zmax);
+
+        p.xmin.scale.set(sz, sy, 1);
+        p.xmax.scale.set(sz, sy, 1);
+        p.ymin.scale.set(sx, sz, 1);
+        p.ymax.scale.set(sx, sz, 1);
+        p.zmin.scale.set(sx, sy, 1);
+        p.zmax.scale.set(sx, sy, 1);
+      }
+
+      function onPointerDownForCropPlanes(event) {
+        if (!pointCloud) return;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        mouse.set(x, y);
+        raycaster.setFromCamera(mouse, camera);
+        const meshes = Object.values(cropPlanes);
+        const intersects = raycaster.intersectObjects(meshes);
+        if (intersects.length > 0) {
+          const picked = intersects[0].object;
+          transformControls.attach(picked);
+          const key = picked.userData.cropKey;
+          transformControls.showX = transformControls.showY = transformControls.showZ = false;
+          if (key === 'xmin' || key === 'xmax') {
+            transformControls.axis = 'X';
+            transformControls.showX = true;
+          } else if (key === 'ymin' || key === 'ymax') {
+            transformControls.axis = 'Y';
+            transformControls.showY = true;
+          } else if (key === 'zmin' || key === 'zmax') {
+            transformControls.axis = 'Z';
+            transformControls.showZ = true;
+          }
+        }
+      }
+
+      function updateCropInputsFromState() {
+        if (crop.xmin == null) return;
+        xminInput.value = crop.xmin.toFixed(4);
+        xmaxInput.value = crop.xmax.toFixed(4);
+        yminInput.value = crop.ymin.toFixed(4);
+        ymaxInput.value = crop.ymax.toFixed(4);
+        zminInput.value = crop.zmin.toFixed(4);
+        zmaxInput.value = crop.zmax.toFixed(4);
+      }
+
+      function updateStateFromCropInputs() {
+        if (!sourceBBox) return;
+        const v = (input, fallback) => {
+          const t = parseFloat(input.value);
+          return Number.isFinite(t) ? t : fallback;
+        };
+        crop.xmin = v(xminInput, crop.xmin);
+        crop.xmax = v(xmaxInput, crop.xmax);
+        crop.ymin = v(yminInput, crop.ymin);
+        crop.ymax = v(ymaxInput, crop.ymax);
+        crop.zmin = v(zminInput, crop.zmin);
+        crop.zmax = v(zmaxInput, crop.zmax);
+        clampCropToBBox();
+        updateCropPlanesFromState();
+        updateCropInputsFromState();
+        updateURLFromState();
+      }
+
+      xminInput.addEventListener('change', updateStateFromCropInputs);
+      xmaxInput.addEventListener('change', updateStateFromCropInputs);
+      yminInput.addEventListener('change', updateStateFromCropInputs);
+      ymaxInput.addEventListener('change', updateStateFromCropInputs);
+      zminInput.addEventListener('change', updateStateFromCropInputs);
+      zmaxInput.addEventListener('change', updateStateFromCropInputs);
+
+      invertCropInput.checked = !!params.invertCrop;
+      invertCropInput.addEventListener('change', () => {
+        params.invertCrop = !!invertCropInput.checked;
+        updateURLFromState();
+      });
+
+      function formatPointSizeLabel(v) {
+        if (v >= 1) return v.toFixed(1) + ' px';
+        if (v >= 0.01) return v.toFixed(4) + ' px';
+        return v.toExponential(2) + ' px';
+      }
+
+      pointSizeRange.value = params.pointSize.toString();
+      pointSizeLabel.textContent = formatPointSizeLabel(params.pointSize);
+      pointSizeRange.addEventListener('input', () => {
+        params.pointSize = parseFloat(pointSizeRange.value) || DEFAULT_POINT_SIZE;
+        pointSizeLabel.textContent = formatPointSizeLabel(params.pointSize);
+        if (pointMaterial) {
+          pointMaterial.size = params.pointSize;
+          pointMaterial.needsUpdate = true;
+        }
+        updateURLFromState();
+      });
+
+      resetCropButton.addEventListener('click', () => {
+        if (!sourceBBox) return;
+        crop.xmin = sourceBBox.min.x;
+        crop.xmax = sourceBBox.max.x;
+        crop.ymin = sourceBBox.min.y;
+        crop.ymax = sourceBBox.max.y;
+        crop.zmin = sourceBBox.min.z;
+        crop.zmax = sourceBBox.max.z;
+        clampCropToBBox();
+        updateCropPlanesFromState();
+        updateCropInputsFromState();
+        updateURLFromState();
+      });
+
+      function frameCameraToBBox() {
+        if (!sourceBBox) return;
+        const center = sourceBBox.getCenter(new THREE.Vector3());
+        const size = sourceBBox.getSize(new THREE.Vector3());
+        const maxSide = Math.max(size.x, size.y, size.z);
+        const radius = maxSide * 1.2 || 1;
+        controls.target.copy(center);
+        camera.position.copy(center).add(new THREE.Vector3(radius, radius * 0.6, radius * 1.2));
+        camera.near = radius / 100;
+        camera.far = radius * 20;
+        camera.updateProjectionMatrix();
+        controls.update();
+      }
+
+      function clearCurrentPointCloud() {
+        if (pointCloud) {
+          scene.remove(pointCloud);
+          pointCloud.geometry.dispose();
+          pointCloud.material.dispose();
+          pointCloud = null;
+          pointGeometry = null;
+          pointMaterial = null;
+          sourceBBox = null;
+          hasPointColors = false;
+        }
+      }
+
+      function onPLYGeometryLoaded(geometry, name) {
+        clearCurrentPointCloud();
+
+        geometry.computeBoundingBox();
+        sourceBBox = geometry.boundingBox.clone();
+        const posAttr = geometry.getAttribute('position');
+        const count = posAttr ? posAttr.count : 0;
+
+        hasPointColors = !!geometry.getAttribute('color');
+
+        const material = new THREE.PointsMaterial({
+          size: params.pointSize,
+          sizeAttenuation: true,
+          vertexColors: hasPointColors,
+          color: 0xffffff
+        });
+
+        const points = new THREE.Points(geometry, material);
+        pointCloud = points;
+        pointGeometry = geometry;
+        pointMaterial = material;
+        sourceFileName = name;
+
+        scene.add(points);
+        frameCameraToBBox();
+        initCropFromBBox();
+
+        fileNameEl.textContent = name || '알 수 없음';
+        pointCountEl.textContent = count.toLocaleString('en-US');
+        downloadButton.disabled = false;
+        resetCropButton.disabled = false;
+        presetButton.disabled = false;
+        dropHint.style.display = 'none';
+      }
+
+      function handleDropFile(file) {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.ply')) {
+          alert('현재는 .ply 포인트 클라우드 파일만 지원합니다.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const arrayBuffer = e.target.result;
+            const geometry = plyLoader.parse(arrayBuffer);
+            onPLYGeometryLoaded(geometry, file.name);
+          } catch (err) {
+            console.error(err);
+            alert('PLY 파일을 읽는 중 오류가 발생했습니다.');
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      function setupDragAndDrop() {
+        const prevent = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        };
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach((eventName) => {
+          window.addEventListener(eventName, prevent);
+        });
+
+        window.addEventListener('dragenter', () => {
+          dropOverlay.style.display = 'flex';
+        });
+        window.addEventListener('dragleave', (e) => {
+          if (e.target === document || e.target === window) {
+            dropOverlay.style.display = 'none';
+          }
+        });
+        window.addEventListener('drop', (e) => {
+          dropOverlay.style.display = 'none';
+          const dt = e.dataTransfer;
+          if (!dt || !dt.files || !dt.files.length) return;
+          const file = dt.files[0];
+          handleDropFile(file);
+        });
+      }
+
+      function buildPresetJSON() {
+        if (!sourceBBox) return null;
+        return {
+          version: 1,
+          sourceFile: sourceFileName || null,
+          pointSize: params.pointSize,
+          crop: {
+            xmin: crop.xmin,
+            xmax: crop.xmax,
+            ymin: crop.ymin,
+            ymax: crop.ymax,
+            zmin: crop.zmin,
+            zmax: crop.zmax
+          },
+          sourceBBox: {
+            min: { x: sourceBBox.min.x, y: sourceBBox.min.y, z: sourceBBox.min.z },
+            max: { x: sourceBBox.max.x, y: sourceBBox.max.y, z: sourceBBox.max.z }
+          }
+        };
+      }
+
+      function buildCroppedPLYText() {
+        if (!pointGeometry || !sourceBBox) return null;
+        const posAttr = pointGeometry.getAttribute('position');
+        if (!posAttr) return null;
+        const colorAttr = pointGeometry.getAttribute('color');
+
+        const keptIndices = [];
+        const tmp = new THREE.Vector3();
+        for (let i = 0; i < posAttr.count; i++) {
+          tmp.fromBufferAttribute(posAttr, i);
+          const insideBox =
+            tmp.x >= crop.xmin && tmp.x <= crop.xmax &&
+            tmp.y >= crop.ymin && tmp.y <= crop.ymax &&
+            tmp.z >= crop.zmin && tmp.z <= crop.zmax;
+
+          const keep = params.invertCrop ? !insideBox : insideBox;
+          if (keep) keptIndices.push(i);
+        }
+
+        const n = keptIndices.length;
+        if (!n) {
+          alert(params.invertCrop
+            ? '크롭 박스 바깥에 포함된 포인트가 없습니다.'
+            : '크롭 박스 안에 포함된 포인트가 없습니다.');
+          return null;
+        }
+
+        const lines = [];
+        lines.push('ply');
+        lines.push('format ascii 1.0');
+        lines.push('comment generated by point-cloud-cropper');
+        lines.push('element vertex ' + n);
+        lines.push('property float x');
+        lines.push('property float y');
+        lines.push('property float z');
+        const hasColor = !!colorAttr;
+        if (hasColor) {
+          lines.push('property uchar red');
+          lines.push('property uchar green');
+          lines.push('property uchar blue');
+        }
+        lines.push('end_header');
+
+        for (let k = 0; k < n; k++) {
+          const idx = keptIndices[k];
+          tmp.fromBufferAttribute(posAttr, idx);
+          let line = tmp.x + ' ' + tmp.y + ' ' + tmp.z;
+          if (hasColor) {
+            const r = colorAttr.getX(idx);
+            const g = colorAttr.getY(idx);
+            const b = colorAttr.getZ(idx);
+            const rr = Math.round(r * (r <= 1 ? 255 : 1));
+            const gg = Math.round(g * (g <= 1 ? 255 : 1));
+            const bb = Math.round(b * (b <= 1 ? 255 : 1));
+            line += ' ' + rr + ' ' + gg + ' ' + bb;
+          }
+          lines.push(line);
+        }
+
+        return lines.join('\n');
+      }
+
+      function downloadBlob(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      presetButton.addEventListener('click', () => {
+        if (!sourceBBox) {
+          alert('먼저 포인트 클라우드를 로딩해 주세요.');
+          return;
+        }
+        const preset = buildPresetJSON();
+        if (!preset) return;
+        const presetJSON = JSON.stringify(preset, null, 2);
+        downloadBlob(presetJSON, 'preset.json', 'application/json');
+      });
+
+      downloadButton.addEventListener('click', () => {
+        if (!pointGeometry || !sourceBBox) {
+          alert('먼저 포인트 클라우드를 로딩해 주세요.');
+          return;
+        }
+
+        const plyText = buildCroppedPLYText();
+        if (!plyText) return;
+
+        const baseName = (sourceFileName || 'cloud').replace(/\.ply$/i, '');
+        const plyName = 'cropped_' + baseName + '.ply';
+
+        downloadBlob(plyText, plyName, 'application/octet-stream');
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      setupDragAndDrop();
+      updateURLFromState();
+    </script>
+  </body>
+</html>
