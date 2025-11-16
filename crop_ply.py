@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import struct
 import sys
@@ -45,7 +46,6 @@ def read_preset(preset_path: str):
 
     invert_crop = bool(data.get("invertCrop", False))
 
-    # customPlanes are optional and currently ignored by this CLI.
     custom_planes = data.get("customPlanes", [])
 
     return (xmin, xmax, ymin, ymax, zmin, zmax), invert_crop, custom_planes
@@ -124,14 +124,174 @@ def build_output_header(format_type: str, vertex_props, vertex_count: int) -> st
     return "\n".join(lines) + "\n"
 
 
-def crop_ascii_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool = False):
+def _compute_plane_normals_and_points(custom_planes, crop_bounds):
     xmin, xmax, ymin, ymax, zmin, zmax = crop_bounds
+    cx = 0.5 * (xmin + xmax)
+    cy = 0.5 * (ymin + ymax)
+    cz = 0.5 * (zmin + zmax)
+
+    normals: List[Tuple[float, float, float]] = []
+    points: List[Tuple[float, float, float]] = []
+    for plane in custom_planes:
+        yaw_deg = float(plane.get("yaw", 0.0))
+        pitch_deg = float(plane.get("pitch", 0.0))
+        yaw = math.radians(yaw_deg)
+        pitch = math.radians(pitch_deg)
+        nx = math.sin(yaw) * math.cos(pitch)
+        ny = math.sin(pitch)
+        nz = math.cos(yaw) * math.cos(pitch)
+        length = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if length == 0:
+            nx, ny, nz = 0.0, 0.0, 1.0
+            length = 1.0
+        nx /= length
+        ny /= length
+        nz /= length
+        normals.append((nx, ny, nz))
+
+        px = plane.get("px")
+        py = plane.get("py")
+        pz = plane.get("pz")
+        if px is None or py is None or pz is None:
+            px, py, pz = cx, cy, cz
+        points.append((float(px), float(py), float(pz)))
+
+    return normals, points
+
+
+def crop_ascii_ply(
+    in_path: str,
+    out_path: str,
+    crop_bounds,
+    invert_crop: bool = False,
+    custom_planes=None,
+):
+    xmin, xmax, ymin, ymax, zmin, zmax = crop_bounds
+    custom_planes = custom_planes or []
+    use_custom = bool(custom_planes)
+
+    # First pass: if custom planes exist, determine smallest region key.
+    selected_key = None
+    normals: List[Tuple[float, float, float]] = []
+    center = (0.0, 0.0, 0.0)
+
+    if use_custom:
+        with open(in_path, "rb") as f:
+            format_type, vertex_count, vertex_props, header_end = parse_ply_header(f)
+            if format_type != "ascii":
+                raise SystemExit("Internal error: crop_ascii_ply called for non-ascii file.")
+
+            name_to_index = {name: i for i, (name, _) in enumerate(vertex_props)}
+            try:
+                ix = name_to_index["x"]
+                iy = name_to_index["y"]
+                iz = name_to_index["z"]
+            except KeyError:
+                raise SystemExit("Error: vertex properties must include x, y, z.")
+
+            normals, plane_points = _compute_plane_normals_and_points(
+                custom_planes, crop_bounds
+            )
+            plane_count = len(normals)
+            plane_dots = [
+                nx * px + ny * py + nz * pz
+                for (nx, ny, nz), (px, py, pz) in zip(normals, plane_points)
+            ]
+
+            region_map = {}
+
+            for _ in range(vertex_count):
+                line_bytes = f.readline()
+                if not line_bytes:
+                    raise SystemExit(
+                        "Error: unexpected EOF while reading ascii vertex data."
+                    )
+                line_str = line_bytes.decode("ascii", errors="ignore").strip()
+                if not line_str:
+                    continue
+                tokens = line_str.split()
+                if len(tokens) <= max(ix, iy, iz):
+                    continue
+                try:
+                    x = float(tokens[ix])
+                    y = float(tokens[iy])
+                    z = float(tokens[iz])
+                except ValueError:
+                    continue
+                inside_box = (
+                    xmin <= x <= xmax
+                    and ymin <= y <= ymax
+                    and zmin <= z <= zmax
+                )
+                if not inside_box:
+                    continue
+
+                key_chars = []
+                for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                    d = nx * x + ny * y + nz * z - p_dot
+                    key_chars.append("1" if d >= 0 else "0")
+                key = "".join(key_chars)
+
+                region = region_map.get(key)
+                if region is None:
+                    region = {
+                        "min": [x, y, z],
+                        "max": [x, y, z],
+                        "count": 0,
+                    }
+                    region_map[key] = region
+                else:
+                    mn = region["min"]
+                    mx = region["max"]
+                    mn[0] = min(mn[0], x)
+                    mn[1] = min(mn[1], y)
+                    mn[2] = min(mn[2], z)
+                    mx[0] = max(mx[0], x)
+                    mx[1] = max(mx[1], y)
+                    mx[2] = max(mx[2], z)
+                region["count"] += 1
+
+        if region_map:
+            best_key = None
+            best_region = None
+            best_score = -float("inf")
+            best_count = -float("inf")
+            for key, region in region_map.items():
+                mn = region["min"]
+                mx = region["max"]
+                intersect_count = 0
+                for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                    min_dot = float("inf")
+                    max_dot = -float("inf")
+                    for x in (mn[0], mx[0]):
+                        for y in (mn[1], mx[1]):
+                            for z in (mn[2], mx[2]):
+                                d = nx * x + ny * y + nz * z
+                                if d < min_dot:
+                                    min_dot = d
+                                if d > max_dot:
+                                    max_dot = d
+                    if min_dot <= p_dot <= max_dot:
+                        intersect_count += 1
+
+                score = intersect_count
+                if score > best_score or (score == best_score and region["count"] > best_count):
+                    best_score = score
+                    best_count = region["count"]
+                    best_key = key
+                    best_region = region
+
+            selected_key = best_key
+        else:
+            # No region inside the box; treat as if there are no custom planes.
+            use_custom = False
+
+    # Second pass: perform actual cropping.
     with open(in_path, "rb") as f:
         format_type, vertex_count, vertex_props, header_end = parse_ply_header(f)
         if format_type != "ascii":
             raise SystemExit("Internal error: crop_ascii_ply called for non-ascii file.")
 
-        # Determine indices of x, y, z within each vertex row
         name_to_index = {name: i for i, (name, _) in enumerate(vertex_props)}
         try:
             ix = name_to_index["x"]
@@ -140,11 +300,21 @@ def crop_ascii_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool =
         except KeyError:
             raise SystemExit("Error: vertex properties must include x, y, z.")
 
+        normals, plane_points = _compute_plane_normals_and_points(
+            custom_planes, crop_bounds
+        )
+        plane_dots = [
+            nx * px + ny * py + nz * pz
+            for (nx, ny, nz), (px, py, pz) in zip(normals, plane_points)
+        ]
+
         kept_lines = []
         for _ in range(vertex_count):
             line_bytes = f.readline()
             if not line_bytes:
-                raise SystemExit("Error: unexpected EOF while reading ascii vertex data.")
+                raise SystemExit(
+                    "Error: unexpected EOF while reading ascii vertex data."
+                )
             line_str = line_bytes.decode("ascii", errors="ignore").strip()
             if not line_str:
                 continue
@@ -157,8 +327,26 @@ def crop_ascii_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool =
                 z = float(tokens[iz])
             except ValueError:
                 continue
-            inside_box = (xmin <= x <= xmax) and (ymin <= y <= ymax) and (zmin <= z <= zmax)
-            keep = inside_box if not invert_crop else not inside_box
+
+            inside_box = (
+                xmin <= x <= xmax
+                and ymin <= y <= ymax
+                and zmin <= z <= zmax
+            )
+
+            if use_custom and selected_key is not None and normals:
+                is_selected = False
+                if inside_box:
+                    key_chars = []
+                    for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                        d = nx * x + ny * y + nz * z - p_dot
+                        key_chars.append("1" if d >= 0 else "0")
+                    key = "".join(key_chars)
+                    is_selected = key == selected_key
+                keep = not is_selected if invert_crop else is_selected
+            else:
+                keep = inside_box if not invert_crop else not inside_box
+
             if keep:
                 kept_lines.append(line_str)
 
@@ -169,14 +357,143 @@ def crop_ascii_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool =
             g.write(line + "\n")
 
 
-def crop_binary_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool = False):
+def crop_binary_ply(
+    in_path: str,
+    out_path: str,
+    crop_bounds,
+    invert_crop: bool = False,
+    custom_planes=None,
+):
     xmin, xmax, ymin, ymax, zmin, zmax = crop_bounds
+    custom_planes = custom_planes or []
+    use_custom = bool(custom_planes)
+
+    selected_key = None
+    normals: List[Tuple[float, float, float]] = []
+    center = (0.0, 0.0, 0.0)
+
+    # First pass for smallest region key when we have custom planes.
+    if use_custom:
+        with open(in_path, "rb") as f:
+            format_type, vertex_count, vertex_props, header_end = parse_ply_header(f)
+            if format_type != "binary_little_endian":
+                raise SystemExit(
+                    "Internal error: crop_binary_ply called for non-binary file."
+                )
+
+            fmt_parts = []
+            for name, p_type in vertex_props:
+                if p_type not in PLY_TYPE_TO_STRUCT:
+                    raise SystemExit(f"Error: unsupported PLY data type '{p_type}'.")
+                fmt_parts.append(PLY_TYPE_TO_STRUCT[p_type])
+            struct_fmt = "<" + "".join(fmt_parts)
+            rec_size = struct.calcsize(struct_fmt)
+
+            name_to_index = {name: i for i, (name, _) in enumerate(vertex_props)}
+            try:
+                ix = name_to_index["x"]
+                iy = name_to_index["y"]
+                iz = name_to_index["z"]
+            except KeyError:
+                raise SystemExit("Error: vertex properties must include x, y, z.")
+
+            normals, plane_points = _compute_plane_normals_and_points(
+                custom_planes, crop_bounds
+            )
+            plane_count = len(normals)
+            plane_dots = [
+                nx * px + ny * py + nz * pz
+                for (nx, ny, nz), (px, py, pz) in zip(normals, plane_points)
+            ]
+
+            region_map = {}
+
+            for _ in range(vertex_count):
+                rec = f.read(rec_size)
+                if len(rec) != rec_size:
+                    raise SystemExit(
+                        "Error: unexpected EOF while reading binary vertex data."
+                    )
+                values = struct.unpack(struct_fmt, rec)
+                x = float(values[ix])
+                y = float(values[iy])
+                z = float(values[iz])
+
+                inside_box = (
+                    xmin <= x <= xmax
+                    and ymin <= y <= ymax
+                    and zmin <= z <= zmax
+                )
+                if not inside_box:
+                    continue
+
+                key_chars = []
+                for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                    d = nx * x + ny * y + nz * z - p_dot
+                    key_chars.append("1" if d >= 0 else "0")
+                key = "".join(key_chars)
+
+                region = region_map.get(key)
+                if region is None:
+                    region = {
+                        "min": [x, y, z],
+                        "max": [x, y, z],
+                        "count": 0,
+                    }
+                    region_map[key] = region
+                else:
+                    mn = region["min"]
+                    mx = region["max"]
+                    mn[0] = min(mn[0], x)
+                    mn[1] = min(mn[1], y)
+                    mn[2] = min(mn[2], z)
+                    mx[0] = max(mx[0], x)
+                    mx[1] = max(mx[1], y)
+                    mx[2] = max(mx[2], z)
+                region["count"] += 1
+
+        if region_map:
+            best_key = None
+            best_region = None
+            best_score = -float("inf")
+            best_count = -float("inf")
+            for key, region in region_map.items():
+                mn = region["min"]
+                mx = region["max"]
+                intersect_count = 0
+                for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                    min_dot = float("inf")
+                    max_dot = -float("inf")
+                    for x in (mn[0], mx[0]):
+                        for y in (mn[1], mx[1]):
+                            for z in (mn[2], mx[2]):
+                                d = nx * x + ny * y + nz * z
+                                if d < min_dot:
+                                    min_dot = d
+                                if d > max_dot:
+                                    max_dot = d
+                    if min_dot <= p_dot <= max_dot:
+                        intersect_count += 1
+
+                score = intersect_count
+                if score > best_score or (score == best_score and region["count"] > best_count):
+                    best_score = score
+                    best_count = region["count"]
+                    best_key = key
+                    best_region = region
+
+            selected_key = best_key
+        else:
+            use_custom = False
+
+    # Second pass: crop and write.
     with open(in_path, "rb") as f:
         format_type, vertex_count, vertex_props, header_end = parse_ply_header(f)
         if format_type != "binary_little_endian":
-            raise SystemExit("Internal error: crop_binary_ply called for non-binary file.")
+            raise SystemExit(
+                "Internal error: crop_binary_ply called for non-binary file."
+            )
 
-        # Map vertex properties to struct format
         fmt_parts = []
         for name, p_type in vertex_props:
             if p_type not in PLY_TYPE_TO_STRUCT:
@@ -193,17 +510,45 @@ def crop_binary_ply(in_path: str, out_path: str, crop_bounds, invert_crop: bool 
         except KeyError:
             raise SystemExit("Error: vertex properties must include x, y, z.")
 
+        normals, plane_points = _compute_plane_normals_and_points(
+            custom_planes, crop_bounds
+        )
+        plane_dots = [
+            nx * px + ny * py + nz * pz
+            for (nx, ny, nz), (px, py, pz) in zip(normals, plane_points)
+        ]
+
         kept_records = []
         for _ in range(vertex_count):
             rec = f.read(rec_size)
             if len(rec) != rec_size:
-                raise SystemExit("Error: unexpected EOF while reading binary vertex data.")
+                raise SystemExit(
+                    "Error: unexpected EOF while reading binary vertex data."
+                )
             values = struct.unpack(struct_fmt, rec)
             x = float(values[ix])
             y = float(values[iy])
             z = float(values[iz])
-            inside_box = (xmin <= x <= xmax) and (ymin <= y <= ymax) and (zmin <= z <= zmax)
-            keep = inside_box if not invert_crop else not inside_box
+
+            inside_box = (
+                xmin <= x <= xmax
+                and ymin <= y <= ymax
+                and zmin <= z <= zmax
+            )
+
+            if use_custom and selected_key is not None and normals:
+                is_selected = False
+                if inside_box:
+                    key_chars = []
+                    for (nx, ny, nz), p_dot in zip(normals, plane_dots):
+                        d = nx * x + ny * y + nz * z - p_dot
+                        key_chars.append("1" if d >= 0 else "0")
+                    key = "".join(key_chars)
+                    is_selected = key == selected_key
+                keep = not is_selected if invert_crop else is_selected
+            else:
+                keep = inside_box if not invert_crop else not inside_box
+
             if keep:
                 kept_records.append(rec)
 
@@ -233,7 +578,7 @@ def main(argv=None):
     if not os.path.isfile(preset_path):
         raise SystemExit(f"Error: preset file not found: {preset_path}")
 
-    crop_bounds, invert_crop, _custom_planes = read_preset(preset_path)
+    crop_bounds, invert_crop, custom_planes = read_preset(preset_path)
 
     with open(ply_path, "rb") as f:
         format_type, vertex_count, vertex_props, header_end = parse_ply_header(f)
@@ -248,9 +593,21 @@ def main(argv=None):
         out_path = os.path.join(os.path.dirname(ply_path), f"cropped_{root}{ext}")
 
     if format_type == "ascii":
-        crop_ascii_ply(ply_path, out_path, crop_bounds, invert_crop=invert_crop)
+        crop_ascii_ply(
+            ply_path,
+            out_path,
+            crop_bounds,
+            invert_crop=invert_crop,
+            custom_planes=custom_planes,
+        )
     elif format_type == "binary_little_endian":
-        crop_binary_ply(ply_path, out_path, crop_bounds, invert_crop=invert_crop)
+        crop_binary_ply(
+            ply_path,
+            out_path,
+            crop_bounds,
+            invert_crop=invert_crop,
+            custom_planes=custom_planes,
+        )
     else:
         raise SystemExit(f"Error: unsupported PLY format '{format_type}'.")
 

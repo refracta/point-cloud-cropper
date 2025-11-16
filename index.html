@@ -280,7 +280,7 @@
         <div class="section">
           <div class="section-header">
             <div class="section-title">Crop Box</div>
-            <div class="section-note">URL 파라미터: <code>xmin..zmax</code>, <code>inv</code></div>
+            <div class="section-note">URL 파라미터: <code>xmin..zmax</code>, <code>inv</code>, <code>cb</code></div>
           </div>
           <div class="field-row-compact">
             <label for="xminInput">X Min</label>
@@ -302,7 +302,7 @@
             <label for="zminInput">Z Min</label>
             <input id="zminInput" type="number" step="0.001" />
           </div>
-          <div class="field-row-compact" style="margin-bottom: 6px;">
+          <div class="field-row-compact">
             <label for="zmaxInput">Z Max</label>
             <input id="zmaxInput" type="number" step="0.001" />
           </div>
@@ -310,9 +310,29 @@
             <label for="invertCrop">Invert Crop</label>
             <input id="invertCrop" type="checkbox" />
           </div>
+          <div class="field-row-compact">
+            <label for="showCropBox">Show Crop Box</label>
+            <input id="showCropBox" type="checkbox" />
+          </div>
           <div style="display:flex; gap:6px; margin-top:4px;">
             <button id="resetCropButton" class="secondary" disabled>전체 포함으로 리셋</button>
           </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Custom Planes</div>
+            <div class="section-note">URL 파라미터: <code>cpYaw</code>, <code>cpPitch</code>, <code>cpPx..cpPz</code>, <code>cps</code></div>
+          </div>
+          <div class="field-row-compact" style="margin-bottom:4px;">
+            <label for="showCustomPlanes">Show All Planes</label>
+            <input id="showCustomPlanes" type="checkbox" />
+          </div>
+          <div style="display:flex; gap:6px; margin-bottom:4px;">
+            <button id="addPlaneButton" class="secondary" style="flex:1;">평면 추가</button>
+            <button id="clearPlanesButton" class="secondary" style="flex:1;">모두 삭제</button>
+          </div>
+          <div id="customPlanesList" style="max-height:140px; overflow-y:auto;"></div>
         </div>
 
         <div class="section">
@@ -359,6 +379,11 @@
       const zminInput = document.getElementById('zminInput');
       const zmaxInput = document.getElementById('zmaxInput');
       const invertCropInput = document.getElementById('invertCrop');
+      const showCropBoxInput = document.getElementById('showCropBox');
+      const showCustomPlanesInput = document.getElementById('showCustomPlanes');
+      const addPlaneButton = document.getElementById('addPlaneButton');
+      const clearPlanesButton = document.getElementById('clearPlanesButton');
+      const customPlanesList = document.getElementById('customPlanesList');
 
       const DEFAULT_POINT_SIZE = 2.0;
 
@@ -369,10 +394,18 @@
           const v = parseFloat(q.get(k));
           return Number.isFinite(v) ? v : undefined;
         };
+        const boolParam = (k) => {
+          if (!q.has(k)) return undefined;
+          const v = q.get(k);
+          return /^(1|true|on|yes)$/i.test(v);
+        };
         const cfg = {
           pointSize: num('ps'),
           crop: null,
-          invertCrop: undefined
+          invertCrop: undefined,
+          showCropBox: undefined,
+          showCustomPlanes: undefined,
+          customPlanes: []
         };
         const keys = ['xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax'];
         const crop = {};
@@ -387,9 +420,33 @@
         }
         if (allPresent) cfg.crop = crop;
 
-        if (q.has('inv')) {
-          const v = q.get('inv');
-          cfg.invertCrop = /^(1|true|on|yes)$/i.test(v);
+        cfg.invertCrop = boolParam('inv');
+        cfg.showCropBox = boolParam('cb');
+        cfg.showCustomPlanes = boolParam('cps');
+
+        const yawStr = q.get('cpYaw');
+        const pitchStr = q.get('cpPitch');
+        const pxStr = q.get('cpPx');
+        const pyStr = q.get('cpPy');
+        const pzStr = q.get('cpPz');
+        const visStr = q.get('cpVis');
+        if (yawStr) {
+          const yawArr = yawStr.split(',').map((s) => parseFloat(s)).filter((v) => Number.isFinite(v));
+          const pitchArr = pitchStr
+            ? pitchStr.split(',').map((s) => parseFloat(s))
+            : [];
+          const pxArr = pxStr ? pxStr.split(',').map((s) => parseFloat(s)) : [];
+          const pyArr = pyStr ? pyStr.split(',').map((s) => parseFloat(s)) : [];
+          const pzArr = pzStr ? pzStr.split(',').map((s) => parseFloat(s)) : [];
+          const visArr = visStr ? visStr.split(',') : [];
+          cfg.customPlanes = yawArr.map((yaw, i) => {
+            const pitch = Number.isFinite(pitchArr[i]) ? pitchArr[i] : 0;
+            const px = Number.isFinite(pxArr[i]) ? pxArr[i] : undefined;
+            const py = Number.isFinite(pyArr[i]) ? pyArr[i] : undefined;
+            const pz = Number.isFinite(pzArr[i]) ? pzArr[i] : undefined;
+            const visible = visArr[i] === '0' ? false : true;
+            return { yaw, pitch, px, py, pz, visible };
+          });
         }
         return cfg;
       }
@@ -397,8 +454,20 @@
       const initialURL = readURLConfig();
       const params = {
         pointSize: initialURL.pointSize ?? DEFAULT_POINT_SIZE,
-        invertCrop: initialURL.invertCrop ?? false
+        invertCrop: initialURL.invertCrop ?? false,
+        showCropBox: initialURL.showCropBox ?? true,
+        showCustomPlanes: initialURL.showCustomPlanes ?? true,
+        customPlanes: initialURL.customPlanes ?? []
       };
+
+      const CUSTOM_PLANE_COLORS = [
+        0xff4b5c,
+        0x22c55e,
+        0x3b82f6,
+        0xf97316,
+        0xa855f7,
+        0x14b8a6
+      ];
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x000000);
@@ -409,6 +478,7 @@
       const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.localClippingEnabled = true;
       viewport.appendChild(renderer.domElement);
 
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -448,6 +518,13 @@
       const cropPlanes = {};
       let transformControls = null;
       let hasAppliedInitialCropFromURL = false;
+      const customPlaneMeshes = [];
+      let smallRegionBox = null;
+      let smallRegionHelper = null;
+      let regionMesh = null;
+      let regionMaterial = null;
+      let lastRegionInfo = null;
+      let currentSelectionType = null; // 'crop' | 'custom' | null
 
       function resizeRenderer() {
         const rect = viewport.getBoundingClientRect();
@@ -460,6 +537,46 @@
 
       window.addEventListener('resize', resizeRenderer);
       resizeRenderer();
+
+      function updateCropBoxVisibility() {
+        const visible = !!params.showCropBox;
+        for (const key in cropPlanes) {
+          const mesh = cropPlanes[key];
+          if (mesh) mesh.visible = visible;
+        }
+      }
+
+      function clearRegionHighlight() {
+        lastRegionInfo = null;
+        if (smallRegionHelper) smallRegionHelper.visible = false;
+        if (regionMesh) regionMesh.visible = false;
+      }
+
+      function ensureRegionHighlightObjects() {
+        if (!smallRegionBox) {
+          smallRegionBox = new THREE.Box3();
+        }
+        if (!smallRegionHelper) {
+          smallRegionHelper = new THREE.Box3Helper(smallRegionBox, 0xffd166);
+          smallRegionHelper.visible = false;
+          scene.add(smallRegionHelper);
+        }
+        if (!regionMesh) {
+          const geo = new THREE.BoxGeometry(1, 1, 1);
+          regionMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffd166,
+            transparent: true,
+            opacity: 0.22,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            clippingPlanes: []
+          });
+          regionMesh = new THREE.Mesh(geo, regionMaterial);
+          regionMesh.renderOrder = 3;
+          regionMesh.visible = false;
+          scene.add(regionMesh);
+        }
+      }
 
       function updateURLFromState() {
         const q = new URLSearchParams(window.location.search);
@@ -474,6 +591,9 @@
           q.delete('inv');
         }
 
+        q.set('cb', params.showCropBox ? '1' : '0');
+        q.set('cps', params.showCustomPlanes ? '1' : '0');
+
         if (crop.xmin != null && crop.xmax != null &&
             crop.ymin != null && crop.ymax != null &&
             crop.zmin != null && crop.zmax != null) {
@@ -483,6 +603,28 @@
           q.set('ymax', crop.ymax.toFixed(4));
           q.set('zmin', crop.zmin.toFixed(4));
           q.set('zmax', crop.zmax.toFixed(4));
+        }
+
+        if (params.customPlanes && params.customPlanes.length) {
+          const yawStr = params.customPlanes.map((p) => (p.yaw || 0).toFixed(2)).join(',');
+          const pitchStr = params.customPlanes.map((p) => (p.pitch || 0).toFixed(2)).join(',');
+          const pxStr = params.customPlanes.map((p) => (p.px ?? (crop.xmin + crop.xmax) / 2).toFixed(4)).join(',');
+          const pyStr = params.customPlanes.map((p) => (p.py ?? (crop.ymin + crop.ymax) / 2).toFixed(4)).join(',');
+          const pzStr = params.customPlanes.map((p) => (p.pz ?? (crop.zmin + crop.zmax) / 2).toFixed(4)).join(',');
+          const visStr = params.customPlanes.map((p) => (p.visible === false ? '0' : '1')).join(',');
+          q.set('cpYaw', yawStr);
+          q.set('cpPitch', pitchStr);
+          q.set('cpPx', pxStr);
+          q.set('cpPy', pyStr);
+          q.set('cpPz', pzStr);
+          q.set('cpVis', visStr);
+        } else {
+          q.delete('cpYaw');
+          q.delete('cpPitch');
+          q.delete('cpPx');
+          q.delete('cpPy');
+          q.delete('cpPz');
+          q.delete('cpVis');
         }
 
         const query = q.toString();
@@ -541,6 +683,9 @@
         createCropPlanesIfNeeded();
         updateCropPlanesFromState();
         updateCropInputsFromState();
+        updateCropBoxVisibility();
+        updateCustomPlaneMeshesFromParams();
+        recomputeRegionInfoAndHighlight();
         updateURLFromState();
       }
 
@@ -593,37 +738,68 @@
         });
         transformControls.addEventListener('objectChange', () => {
           const obj = transformControls.object;
-          if (!obj || !obj.userData || !obj.userData.cropKey) return;
-          const key = obj.userData.cropKey;
-          const p = obj.position;
-          const eps = 1e-5;
-          if (key === 'xmin') {
-            crop.xmin = p.x;
-            if (crop.xmin > crop.xmax - eps) crop.xmin = crop.xmax - eps;
-          } else if (key === 'xmax') {
-            crop.xmax = p.x;
-            if (crop.xmax < crop.xmin + eps) crop.xmax = crop.xmin + eps;
-          } else if (key === 'ymin') {
-            crop.ymin = p.y;
-            if (crop.ymin > crop.ymax - eps) crop.ymin = crop.ymax - eps;
-          } else if (key === 'ymax') {
-            crop.ymax = p.y;
-            if (crop.ymax < crop.ymin + eps) crop.ymax = crop.ymin + eps;
-          } else if (key === 'zmin') {
-            crop.zmin = p.z;
-            if (crop.zmin > crop.zmax - eps) crop.zmin = crop.zmax - eps;
-          } else if (key === 'zmax') {
-            crop.zmax = p.z;
-            if (crop.zmax < crop.zmin + eps) crop.zmax = crop.zmin + eps;
+          if (!obj || !obj.userData) return;
+
+          if (obj.userData.cropKey) {
+            const key = obj.userData.cropKey;
+            const p = obj.position;
+            const eps = 1e-5;
+            if (key === 'xmin') {
+              crop.xmin = p.x;
+              if (crop.xmin > crop.xmax - eps) crop.xmin = crop.xmax - eps;
+            } else if (key === 'xmax') {
+              crop.xmax = p.x;
+              if (crop.xmax < crop.xmin + eps) crop.xmax = crop.xmin + eps;
+            } else if (key === 'ymin') {
+              crop.ymin = p.y;
+              if (crop.ymin > crop.ymax - eps) crop.ymin = crop.ymax - eps;
+            } else if (key === 'ymax') {
+              crop.ymax = p.y;
+              if (crop.ymax < crop.ymin + eps) crop.ymax = crop.ymin + eps;
+            } else if (key === 'zmin') {
+              crop.zmin = p.z;
+              if (crop.zmin > crop.zmax - eps) crop.zmin = crop.zmax - eps;
+            } else if (key === 'zmax') {
+              crop.zmax = p.z;
+              if (crop.zmax < crop.zmin + eps) crop.zmax = crop.zmin + eps;
+            }
+            clampCropToBBox();
+            updateCropPlanesFromState();
+            updateCropInputsFromState();
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            updateURLFromState();
+          } else if (obj.userData.customPlaneIndex != null && params.customPlanes) {
+            const idx = obj.userData.customPlaneIndex;
+            const plane = params.customPlanes[idx];
+            if (!plane) return;
+
+            if (crop.xmin != null) {
+              const p = obj.position;
+              const px = Math.min(Math.max(p.x, crop.xmin), crop.xmax);
+              const py = Math.min(Math.max(p.y, crop.ymin), crop.ymax);
+              const pz = Math.min(Math.max(p.z, crop.zmin), crop.zmax);
+              plane.px = px;
+              plane.py = py;
+              plane.pz = pz;
+            }
+
+            const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(obj.quaternion).normalize();
+            const pitchRad = Math.asin(THREE.MathUtils.clamp(normal.y, -1, 1));
+            const yawRad = Math.atan2(normal.x, normal.z);
+            plane.yaw = THREE.MathUtils.radToDeg(yawRad);
+            plane.pitch = THREE.MathUtils.radToDeg(pitchRad);
+
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            updateURLFromState();
           }
-          clampCropToBBox();
-          updateCropPlanesFromState();
-          updateCropInputsFromState();
-          updateURLFromState();
         });
         scene.add(transformControls);
 
         renderer.domElement.addEventListener('pointerdown', onPointerDownForCropPlanes);
+
+        updateCropBoxVisibility();
       }
 
       function updateCropPlanesFromState() {
@@ -657,18 +833,32 @@
 
       function onPointerDownForCropPlanes(event) {
         if (!pointCloud) return;
+        if (!transformControls) return;
         const rect = renderer.domElement.getBoundingClientRect();
         const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
         mouse.set(x, y);
         raycaster.setFromCamera(mouse, camera);
-        const meshes = Object.values(cropPlanes);
-        const intersects = raycaster.intersectObjects(meshes);
-        if (intersects.length > 0) {
-          const picked = intersects[0].object;
-          transformControls.attach(picked);
+
+        const targets = [];
+        if (params.showCropBox) {
+          targets.push(...Object.values(cropPlanes));
+        }
+        if (params.showCustomPlanes) {
+          targets.push(...customPlaneMeshes);
+        }
+
+        const intersects = raycaster.intersectObjects(targets);
+        if (!intersects.length) return;
+
+        const picked = intersects[0].object;
+        transformControls.attach(picked);
+        transformControls.showX = transformControls.showY = transformControls.showZ = false;
+
+        if (picked.userData && picked.userData.cropKey) {
           const key = picked.userData.cropKey;
-          transformControls.showX = transformControls.showY = transformControls.showZ = false;
+          currentSelectionType = 'crop';
+          transformControls.setMode('translate');
           if (key === 'xmin' || key === 'xmax') {
             transformControls.axis = 'X';
             transformControls.showX = true;
@@ -679,6 +869,12 @@
             transformControls.axis = 'Z';
             transformControls.showZ = true;
           }
+        } else if (picked.userData && picked.userData.customPlaneIndex != null) {
+          currentSelectionType = 'custom';
+          transformControls.setMode('translate');
+          transformControls.showX = transformControls.showY = transformControls.showZ = true;
+        } else {
+          currentSelectionType = null;
         }
       }
 
@@ -707,6 +903,8 @@
         clampCropToBBox();
         updateCropPlanesFromState();
         updateCropInputsFromState();
+        updateCustomPlaneMeshesFromParams();
+        recomputeRegionInfoAndHighlight();
         updateURLFromState();
       }
 
@@ -720,6 +918,28 @@
       invertCropInput.checked = !!params.invertCrop;
       invertCropInput.addEventListener('change', () => {
         params.invertCrop = !!invertCropInput.checked;
+        updateURLFromState();
+      });
+
+      showCropBoxInput.checked = !!params.showCropBox;
+      showCropBoxInput.addEventListener('change', () => {
+        params.showCropBox = !!showCropBoxInput.checked;
+        updateCropBoxVisibility();
+        if (!params.showCropBox && transformControls && transformControls.object && transformControls.object.userData && transformControls.object.userData.cropKey) {
+          transformControls.detach();
+          currentSelectionType = null;
+        }
+        updateURLFromState();
+      });
+
+      showCustomPlanesInput.checked = !!params.showCustomPlanes;
+      showCustomPlanesInput.addEventListener('change', () => {
+        params.showCustomPlanes = !!showCustomPlanesInput.checked;
+        updateCustomPlaneMeshesFromParams();
+        if (!params.showCustomPlanes && transformControls && transformControls.object && transformControls.object.userData && transformControls.object.userData.customPlaneIndex != null) {
+          transformControls.detach();
+          currentSelectionType = null;
+        }
         updateURLFromState();
       });
 
@@ -741,6 +961,361 @@
         updateURLFromState();
       });
 
+      function rebuildCustomPlanesListUI() {
+        customPlanesList.innerHTML = '';
+        if (!params.customPlanes) params.customPlanes = [];
+        params.customPlanes.forEach((plane, index) => {
+          const row = document.createElement('div');
+          row.className = 'field-row-compact';
+          row.style.alignItems = 'center';
+          row.style.marginBottom = '4px';
+
+          const label = document.createElement('div');
+          label.style.display = 'flex';
+          label.style.alignItems = 'center';
+          label.style.gap = '4px';
+          label.style.fontSize = '11px';
+          const nameSpan = document.createElement('span');
+          nameSpan.textContent = `Plane ${index + 1}`;
+          const visLabel = document.createElement('label');
+          visLabel.style.display = 'flex';
+          visLabel.style.alignItems = 'center';
+          visLabel.style.gap = '2px';
+          visLabel.style.fontSize = '10px';
+          const visCheckbox = document.createElement('input');
+          visCheckbox.type = 'checkbox';
+          visCheckbox.checked = plane.visible !== false;
+          const visText = document.createElement('span');
+          visText.textContent = 'Show';
+          visLabel.appendChild(visCheckbox);
+          visLabel.appendChild(visText);
+          label.appendChild(nameSpan);
+          label.appendChild(visLabel);
+
+          const controls = document.createElement('div');
+          controls.style.display = 'flex';
+          controls.style.gap = '4px';
+
+          const yawInput = document.createElement('input');
+          yawInput.type = 'number';
+          yawInput.step = '1';
+          yawInput.style.width = '40px';
+          yawInput.value = (plane.yaw || 0).toFixed(0);
+          yawInput.title = 'Yaw (deg)';
+
+          const pitchInput = document.createElement('input');
+          pitchInput.type = 'number';
+          pitchInput.step = '1';
+          pitchInput.style.width = '40px';
+          pitchInput.value = (plane.pitch || 0).toFixed(0);
+          pitchInput.title = 'Pitch (deg)';
+
+          const delButton = document.createElement('button');
+          delButton.textContent = 'X';
+          delButton.className = 'secondary';
+          delButton.style.padding = '2px 6px';
+          delButton.style.fontSize = '10px';
+
+          visCheckbox.addEventListener('change', () => {
+            plane.visible = !!visCheckbox.checked;
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            updateURLFromState();
+          });
+
+          yawInput.addEventListener('change', () => {
+            const v = parseFloat(yawInput.value);
+            plane.yaw = Number.isFinite(v) ? v : 0;
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            updateURLFromState();
+          });
+
+          pitchInput.addEventListener('change', () => {
+            const v = parseFloat(pitchInput.value);
+            plane.pitch = Number.isFinite(v) ? v : 0;
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            updateURLFromState();
+          });
+
+          delButton.addEventListener('click', () => {
+            params.customPlanes.splice(index, 1);
+            updateCustomPlaneMeshesFromParams();
+            recomputeRegionInfoAndHighlight();
+            rebuildCustomPlanesListUI();
+            updateURLFromState();
+          });
+
+          controls.appendChild(yawInput);
+          controls.appendChild(pitchInput);
+          controls.appendChild(delButton);
+
+          row.appendChild(label);
+          row.appendChild(controls);
+          customPlanesList.appendChild(row);
+        });
+      }
+
+      addPlaneButton.addEventListener('click', () => {
+        if (!params.customPlanes) params.customPlanes = [];
+        params.customPlanes.push({ yaw: 0, pitch: 0, visible: true });
+        updateCustomPlaneMeshesFromParams();
+        recomputeRegionInfoAndHighlight();
+        rebuildCustomPlanesListUI();
+        updateURLFromState();
+      });
+
+      clearPlanesButton.addEventListener('click', () => {
+        params.customPlanes = [];
+        updateCustomPlaneMeshesFromParams();
+        recomputeRegionInfoAndHighlight();
+        rebuildCustomPlanesListUI();
+        updateURLFromState();
+      });
+
+      function ensureCustomPlaneIndex(i) {
+        if (!params.customPlanes) params.customPlanes = [];
+        while (params.customPlanes.length <= i) {
+          params.customPlanes.push({ yaw: 0, pitch: 0, visible: true });
+        }
+      }
+
+      function updateCustomPlaneMeshesFromParams() {
+        if (!params.customPlanes) params.customPlanes = [];
+
+        if (!sourceBBox || crop.xmin == null) {
+          // Just hide meshes if no geometry/bbox yet.
+          for (const mesh of customPlaneMeshes) {
+            mesh.visible = false;
+          }
+          clearRegionHighlight();
+          return;
+        }
+
+        const cx = (crop.xmin + crop.xmax) / 2;
+        const cy = (crop.ymin + crop.ymax) / 2;
+        const cz = (crop.zmin + crop.zmax) / 2;
+        const dx = Math.max(crop.xmax - crop.xmin, 1e-3);
+        const dy = Math.max(crop.ymax - crop.ymin, 1e-3);
+        const dz = Math.max(crop.zmax - crop.zmin, 1e-3);
+        const maxSide = Math.max(dx, dy, dz);
+        const scale = maxSide * 2.5;
+
+        // Create / update meshes
+        for (let i = 0; i < params.customPlanes.length; i++) {
+          const plane = params.customPlanes[i];
+          if (!Number.isFinite(plane.px)) plane.px = cx;
+          if (!Number.isFinite(plane.py)) plane.py = cy;
+          if (!Number.isFinite(plane.pz)) plane.pz = cz;
+          let mesh = customPlaneMeshes[i];
+          if (!mesh) {
+            const geo = new THREE.PlaneGeometry(1, 1);
+            const mat = new THREE.MeshBasicMaterial({
+              color: CUSTOM_PLANE_COLORS[i % CUSTOM_PLANE_COLORS.length],
+              transparent: true,
+              opacity: 0.16,
+              side: THREE.DoubleSide,
+              depthWrite: false
+            });
+            mesh = new THREE.Mesh(geo, mat);
+            mesh.name = 'CustomPlane_' + i;
+            mesh.renderOrder = 2;
+            mesh.userData.customPlaneIndex = i;
+            scene.add(mesh);
+            customPlaneMeshes[i] = mesh;
+          } else if (mesh.material && mesh.material.color) {
+            mesh.material.color.setHex(CUSTOM_PLANE_COLORS[i % CUSTOM_PLANE_COLORS.length]);
+          }
+
+          const yaw = THREE.MathUtils.degToRad(plane.yaw || 0);
+          const pitch = THREE.MathUtils.degToRad(plane.pitch || 0);
+          const normal = new THREE.Vector3(
+            Math.sin(yaw) * Math.cos(pitch),
+            Math.sin(pitch),
+            Math.cos(yaw) * Math.cos(pitch)
+          ).normalize();
+          const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+          mesh.quaternion.copy(q);
+          mesh.position.set(plane.px, plane.py, plane.pz);
+          mesh.scale.set(scale, scale, 1);
+          mesh.visible = !!params.showCustomPlanes && plane.visible !== false;
+        }
+
+        // Remove extra meshes
+        for (let i = params.customPlanes.length; i < customPlaneMeshes.length; i++) {
+          const mesh = customPlaneMeshes[i];
+          if (mesh) {
+            scene.remove(mesh);
+            if (mesh.geometry) mesh.geometry.dispose();
+            if (mesh.material) mesh.material.dispose();
+          }
+        }
+        customPlaneMeshes.length = params.customPlanes.length;
+      }
+
+      function recomputeRegionInfoAndHighlight() {
+        if (!pointGeometry || !sourceBBox || crop.xmin == null) {
+          clearRegionHighlight();
+          return null;
+        }
+        if (!params.customPlanes || !params.customPlanes.length) {
+          clearRegionHighlight();
+          return null;
+        }
+
+        const posAttr = pointGeometry.getAttribute('position');
+        if (!posAttr) {
+          clearRegionHighlight();
+          return null;
+        }
+
+        const center = new THREE.Vector3(
+          (crop.xmin + crop.xmax) / 2,
+          (crop.ymin + crop.ymax) / 2,
+          (crop.zmin + crop.zmax) / 2
+        );
+
+        const normals = [];
+        const planePoints = [];
+        for (const plane of params.customPlanes) {
+          const yaw = THREE.MathUtils.degToRad(plane.yaw || 0);
+          const pitch = THREE.MathUtils.degToRad(plane.pitch || 0);
+          const n = new THREE.Vector3(
+            Math.sin(yaw) * Math.cos(pitch),
+            Math.sin(pitch),
+            Math.cos(yaw) * Math.cos(pitch)
+          ).normalize();
+          normals.push(n);
+          const px = Number.isFinite(plane.px) ? plane.px : center.x;
+          const py = Number.isFinite(plane.py) ? plane.py : center.y;
+          const pz = Number.isFinite(plane.pz) ? plane.pz : center.z;
+          planePoints.push(new THREE.Vector3(px, py, pz));
+        }
+
+        const planeCount = normals.length;
+        const regionMap = new Map();
+        const tmp = new THREE.Vector3();
+
+        const planeDots = normals.map((n, i) => n.dot(planePoints[i]));
+
+        for (let i = 0; i < posAttr.count; i++) {
+          tmp.fromBufferAttribute(posAttr, i);
+          const insideBox =
+            tmp.x >= crop.xmin && tmp.x <= crop.xmax &&
+            tmp.y >= crop.ymin && tmp.y <= crop.ymax &&
+            tmp.z >= crop.zmin && tmp.z <= crop.zmax;
+          if (!insideBox) continue;
+
+          let key = '';
+          for (let j = 0; j < planeCount; j++) {
+            const d = normals[j].dot(tmp) - planeDots[j];
+            key += d >= 0 ? '1' : '0';
+          }
+          let r = regionMap.get(key);
+          if (!r) {
+            r = {
+              min: new THREE.Vector3().copy(tmp),
+              max: new THREE.Vector3().copy(tmp),
+              count: 0
+            };
+            regionMap.set(key, r);
+          } else {
+            r.min.min(tmp);
+            r.max.max(tmp);
+          }
+          r.count++;
+        }
+
+        if (!regionMap.size) {
+          clearRegionHighlight();
+          return null;
+        }
+
+        let bestKey = null;
+        let bestRegion = null;
+        let bestScore = -Infinity;
+        let bestCount = -Infinity;
+        const corner = new THREE.Vector3();
+        for (const [key, r] of regionMap.entries()) {
+          const mn = r.min;
+          const mx = r.max;
+          let intersectCount = 0;
+          for (let j = 0; j < planeCount; j++) {
+            const n = normals[j];
+            const pDot = planeDots[j];
+            let minDot = Infinity;
+            let maxDot = -Infinity;
+            for (const x of [mn.x, mx.x]) {
+              for (const y of [mn.y, mx.y]) {
+                for (const z of [mn.z, mx.z]) {
+                  corner.set(x, y, z);
+                  const d = n.dot(corner);
+                  if (d < minDot) minDot = d;
+                  if (d > maxDot) maxDot = d;
+                }
+              }
+            }
+            if (minDot <= pDot && pDot <= maxDot) {
+              intersectCount++;
+            }
+          }
+          const score = intersectCount;
+          if (score > bestScore || (score === bestScore && r.count > bestCount)) {
+            bestScore = score;
+            bestCount = r.count;
+            bestKey = key;
+            bestRegion = r;
+          }
+        }
+
+        if (!bestRegion) {
+          clearRegionHighlight();
+          return null;
+        }
+
+        ensureRegionHighlightObjects();
+        // Update debug box but keep it hidden by default
+        smallRegionBox.set(bestRegion.min, bestRegion.max);
+        smallRegionHelper.visible = false;
+
+        const dx = crop.xmax - crop.xmin;
+        const dy = crop.ymax - crop.ymin;
+        const dz = crop.zmax - crop.zmin;
+        regionMesh.position.copy(center);
+        regionMesh.scale.set(Math.max(dx, 1e-3), Math.max(dy, 1e-3), Math.max(dz, 1e-3));
+
+        const planes = [];
+        // Crop-box planes (keep inside box)
+        planes.push(new THREE.Plane(new THREE.Vector3(1, 0, 0), -crop.xmin));
+        planes.push(new THREE.Plane(new THREE.Vector3(-1, 0, 0), crop.xmax));
+        planes.push(new THREE.Plane(new THREE.Vector3(0, 1, 0), -crop.ymin));
+        planes.push(new THREE.Plane(new THREE.Vector3(0, -1, 0), crop.ymax));
+        planes.push(new THREE.Plane(new THREE.Vector3(0, 0, 1), -crop.zmin));
+        planes.push(new THREE.Plane(new THREE.Vector3(0, 0, -1), crop.zmax));
+
+        // Custom planes to isolate selected region
+        for (let j = 0; j < planeCount; j++) {
+          const bit = bestKey[j] === '1';
+          const n = normals[j].clone();
+          const p0 = planePoints[j];
+          if (!bit) n.negate();
+          const constant = -n.dot(p0);
+          planes.push(new THREE.Plane(n, constant));
+        }
+
+        regionMaterial.clippingPlanes = planes;
+        regionMesh.visible = true;
+
+        lastRegionInfo = {
+          normals: normals.map((n) => n.clone()),
+          planePoints: planePoints.map((p) => p.clone()),
+          planeCount,
+          selectedKey: bestKey
+        };
+        return lastRegionInfo;
+      }
+
       resetCropButton.addEventListener('click', () => {
         if (!sourceBBox) return;
         crop.xmin = sourceBBox.min.x;
@@ -752,6 +1327,8 @@
         clampCropToBBox();
         updateCropPlanesFromState();
         updateCropInputsFromState();
+        updateCustomPlaneMeshesFromParams();
+        recomputeRegionInfoAndHighlight();
         updateURLFromState();
       });
 
@@ -870,6 +1447,8 @@
           version: 1,
           sourceFile: sourceFileName || null,
           pointSize: params.pointSize,
+          invertCrop: !!params.invertCrop,
+          showCropBox: !!params.showCropBox,
           crop: {
             xmin: crop.xmin,
             xmax: crop.xmax,
@@ -878,6 +1457,14 @@
             zmin: crop.zmin,
             zmax: crop.zmax
           },
+          customPlanes: (params.customPlanes || []).map((plane) => ({
+            yaw: plane.yaw || 0,
+            pitch: plane.pitch || 0,
+            px: Number.isFinite(plane.px) ? plane.px : (crop.xmin + crop.xmax) / 2,
+            py: Number.isFinite(plane.py) ? plane.py : (crop.ymin + crop.ymax) / 2,
+            pz: Number.isFinite(plane.pz) ? plane.pz : (crop.zmin + crop.zmax) / 2,
+            visible: plane.visible !== false
+          })),
           sourceBBox: {
             min: { x: sourceBBox.min.x, y: sourceBBox.min.y, z: sourceBBox.min.z },
             max: { x: sourceBBox.max.x, y: sourceBBox.max.y, z: sourceBBox.max.z }
@@ -893,6 +1480,17 @@
 
         const keptIndices = [];
         const tmp = new THREE.Vector3();
+
+        const useCustom = params.customPlanes && params.customPlanes.length > 0;
+        let regionInfo = null;
+        if (useCustom) {
+          regionInfo = lastRegionInfo || recomputeRegionInfoAndHighlight();
+        }
+
+        const normals = regionInfo ? regionInfo.normals : null;
+        const planePoints = regionInfo ? regionInfo.planePoints : null;
+        const planeCount = regionInfo ? regionInfo.planeCount : 0;
+
         for (let i = 0; i < posAttr.count; i++) {
           tmp.fromBufferAttribute(posAttr, i);
           const insideBox =
@@ -900,15 +1498,41 @@
             tmp.y >= crop.ymin && tmp.y <= crop.ymax &&
             tmp.z >= crop.zmin && tmp.z <= crop.zmax;
 
-          const keep = params.invertCrop ? !insideBox : insideBox;
+          let keep = false;
+
+          if (useCustom && regionInfo && normals && planePoints && planeCount > 0) {
+            let isSelected = false;
+            if (insideBox) {
+              let key = '';
+              for (let j = 0; j < planeCount; j++) {
+                const n = normals[j];
+                const p0 = planePoints[j];
+                const d = n.dot(tmp) - n.dot(p0);
+                key += d >= 0 ? '1' : '0';
+              }
+              isSelected = (key === regionInfo.selectedKey);
+            }
+            keep = params.invertCrop ? !isSelected : isSelected;
+          } else {
+            keep = params.invertCrop ? !insideBox : insideBox;
+          }
+
           if (keep) keptIndices.push(i);
         }
 
         const n = keptIndices.length;
         if (!n) {
-          alert(params.invertCrop
-            ? '크롭 박스 바깥에 포함된 포인트가 없습니다.'
-            : '크롭 박스 안에 포함된 포인트가 없습니다.');
+          let msg;
+          if (useCustom) {
+            msg = params.invertCrop
+              ? '선택된 가장 작은 영역을 제외한 부분에 포인트가 없습니다.'
+              : '커스텀 평면으로 정의된 가장 작은 영역 안에 포인트가 없습니다.';
+          } else {
+            msg = params.invertCrop
+              ? '크롭 박스 바깥에 포함된 포인트가 없습니다.'
+              : '크롭 박스 안에 포함된 포인트가 없습니다.';
+          }
+          alert(msg);
           return null;
         }
 
@@ -991,6 +1615,22 @@
         renderer.render(scene, camera);
       }
       animate();
+
+      // initial sync for custom planes UI/meshes
+      rebuildCustomPlanesListUI();
+      updateCustomPlaneMeshesFromParams();
+      recomputeRegionInfoAndHighlight();
+
+       // keyboard shortcuts for custom plane transform mode
+      window.addEventListener('keydown', (e) => {
+        if (!transformControls || !transformControls.object) return;
+        if (currentSelectionType !== 'custom') return;
+        if (e.key === 'r' || e.key === 'R') {
+          transformControls.setMode('rotate');
+        } else if (e.key === 't' || e.key === 'T') {
+          transformControls.setMode('translate');
+        }
+      });
 
       setupDragAndDrop();
       updateURLFromState();
