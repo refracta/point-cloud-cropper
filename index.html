@@ -238,29 +238,29 @@
       <div id="viewport-container">
         <div id="viewport"></div>
         <div id="drop-hint">
-          여기로 포인트 클라우드 PLY 파일을<br />드래그 앤 드롭하세요.
+          Drag &amp; Drop a point cloud PLY file here.
         </div>
-        <div id="drop-overlay">여기에 놓으면 로딩됩니다</div>
+        <div id="drop-overlay">Drop here to load PLY</div>
         <div id="info-banner">
-          <div>마우스 좌클릭 드래그: 회전</div>
-          <div>휠: 줌 · 우클릭 드래그: 이동</div>
-          <div>평면 클릭 후 드래그: 크롭 박스 이동</div>
+          <div>Left drag: orbit camera</div>
+          <div>Mouse wheel: zoom · Right drag: pan</div>
+          <div>Click &amp; drag plane: move crop box</div>
         </div>
       </div>
       <div id="sidebar">
         <h1>Point Cloud Cropper</h1>
-        <div class="subtitle">three.js 기반 PLY 크롭 도구</div>
+        <div class="subtitle">PLY cropping tool powered by three.js</div>
 
         <div class="section">
           <div class="section-header">
-            <div class="section-title">파일</div>
+            <div class="section-title">File</div>
           </div>
           <div class="stat-line">
-            <span>이름</span>
-            <span class="value" id="fileName">없음</span>
+            <span>Name</span>
+            <span class="value" id="fileName">-</span>
           </div>
           <div class="stat-line">
-            <span>포인트 수</span>
+            <span>Points</span>
             <span class="value" id="pointCount">-</span>
           </div>
         </div>
@@ -268,10 +268,10 @@
         <div class="section">
           <div class="section-header">
             <div class="section-title">Point Size</div>
-            <div class="section-note">URL 파라미터: <code>ps</code></div>
+            <div class="section-note">URL param: <code>ps</code></div>
           </div>
           <div class="field-row">
-            <label for="pointSizeRange">크기</label>
+            <label for="pointSizeRange">Size</label>
             <input id="pointSizeRange" type="range" min="0.0001" max="10" step="0.0001" />
             <div class="value-label" id="pointSizeLabel">-</div>
           </div>
@@ -280,7 +280,7 @@
         <div class="section">
           <div class="section-header">
             <div class="section-title">Crop Box</div>
-            <div class="section-note">URL 파라미터: <code>xmin..zmax</code>, <code>inv</code>, <code>cb</code></div>
+            <div class="section-note">URL params: <code>xmin..zmax</code>, <code>inv</code>, <code>cb</code></div>
           </div>
           <div class="field-row-compact">
             <label for="xminInput">X Min</label>
@@ -315,22 +315,22 @@
             <input id="showCropBox" type="checkbox" />
           </div>
           <div style="display:flex; gap:6px; margin-top:4px;">
-            <button id="resetCropButton" class="secondary" disabled>전체 포함으로 리셋</button>
+            <button id="resetCropButton" class="secondary" disabled>Reset to full extent</button>
           </div>
         </div>
 
         <div class="section">
           <div class="section-header">
             <div class="section-title">Custom Planes</div>
-            <div class="section-note">URL 파라미터: <code>cpYaw</code>, <code>cpPitch</code>, <code>cpPx..cpPz</code>, <code>cps</code></div>
+            <div class="section-note">URL params: <code>cpYaw</code>, <code>cpPitch</code>, <code>cpPx..cpPz</code>, <code>cps</code></div>
           </div>
           <div class="field-row-compact" style="margin-bottom:4px;">
             <label for="showCustomPlanes">Show All Planes</label>
             <input id="showCustomPlanes" type="checkbox" />
           </div>
           <div style="display:flex; gap:6px; margin-bottom:4px;">
-            <button id="addPlaneButton" class="secondary" style="flex:1;">평면 추가</button>
-            <button id="clearPlanesButton" class="secondary" style="flex:1;">모두 삭제</button>
+            <button id="addPlaneButton" class="secondary" style="flex:1;">Add Plane</button>
+            <button id="clearPlanesButton" class="secondary" style="flex:1;">Clear All</button>
           </div>
           <div id="customPlanesList" style="max-height:140px; overflow-y:auto;"></div>
         </div>
@@ -338,7 +338,7 @@
         <div class="section">
           <div class="section-header">
             <div class="section-title">Magic Volume</div>
-            <div class="section-note">Shift+클릭: 기준점 선택 · URL: <code>ml</code></div>
+            <div class="section-note">Shift+click: pick seed · URL: <code>ml</code>, <code>ms</code></div>
           </div>
           <div class="field-row">
             <label for="magicLength">Magic Point Length</label>
@@ -356,17 +356,16 @@
             <div class="section-title">Export</div>
           </div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
-            <button id="downloadButton" disabled>다운로드: cropped PLY</button>
-            <button id="presetButton" class="secondary" disabled>preset.json 다운로드</button>
+            <button id="downloadButton" disabled>Download: cropped PLY</button>
+            <button id="presetButton" class="secondary" disabled>Download preset.json</button>
           </div>
         </div>
 
         <div id="footer-note">
-          - 평면 6개는 포인트 클라우드 전체를 포함하는 최소 크기로 자동 설정됩니다.<br />
-          - 평면을 드래그하거나 우측 수치를 변경하면<br />
-          &nbsp;&nbsp;현재 <code>ps</code>, <code>xmin..zmax</code> 값이 URL 쿼리에 자동 반영됩니다.<br />
-          - 이 URL을 공유하면 동일한 설정으로 열 수 있습니다<br />
-          &nbsp;&nbsp;(포인트 클라우드는 동일한 파일을 다시 드롭해야 합니다).
+          - The six crop-box planes are initially set to the minimal box that contains the entire cloud.<br />
+          - Drag planes or edit values on the right panel and the current <code>ps</code>, <code>xmin..zmax</code>, Magic Volume, and custom planes are encoded into the URL query.<br />
+          - Share that URL to reproduce the same view and parameters<br />
+          &nbsp;&nbsp;(the receiver still needs to drop the same PLY file).
         </div>
       </div>
     </div>
@@ -1377,7 +1376,7 @@
         if (!pointGeometry || !sourceBBox) return;
         const radius = params.magicLength;
         if (!Number.isFinite(radius) || radius <= 0) {
-          alert('Magic Point Length 를 먼저 0보다 크게 설정해 주세요.');
+          alert('Please set Magic Point Length to a value greater than zero first.');
           return;
         }
         const posAttr = pointGeometry.getAttribute('position');
@@ -1659,7 +1658,7 @@
           }
         }
 
-        fileNameEl.textContent = name || '알 수 없음';
+        fileNameEl.textContent = name || 'Unknown';
         pointCountEl.textContent = count.toLocaleString('en-US');
         downloadButton.disabled = false;
         resetCropButton.disabled = false;
@@ -1670,7 +1669,7 @@
       function handleDropFile(file) {
         if (!file) return;
         if (!file.name.toLowerCase().endsWith('.ply')) {
-          alert('현재는 .ply 포인트 클라우드 파일만 지원합니다.');
+          alert('Only .ply point cloud files are supported at the moment.');
           return;
         }
         const reader = new FileReader();
@@ -1681,7 +1680,7 @@
             onPLYGeometryLoaded(geometry, file.name);
           } catch (err) {
             console.error(err);
-            alert('PLY 파일을 읽는 중 오류가 발생했습니다.');
+            alert('An error occurred while reading the PLY file.');
           }
         };
         reader.readAsArrayBuffer(file);
@@ -1806,14 +1805,18 @@
         const n = keptIndices.length;
         if (!n) {
           let msg;
-          if (useCustom) {
+          if (useMagic) {
             msg = params.invertCrop
-              ? '선택된 가장 작은 영역을 제외한 부분에 포인트가 없습니다.'
-              : '커스텀 평면으로 정의된 가장 작은 영역 안에 포인트가 없습니다.';
+              ? 'No points exist outside the Magic Volume group.'
+              : 'No points exist inside the Magic Volume group.';
+          } else if (useCustom) {
+            msg = params.invertCrop
+              ? 'No points exist outside the selected smallest custom-plane region.'
+              : 'There are no points inside the region defined by custom planes.';
           } else {
             msg = params.invertCrop
-              ? '크롭 박스 바깥에 포함된 포인트가 없습니다.'
-              : '크롭 박스 안에 포함된 포인트가 없습니다.';
+              ? 'There are no points outside the crop box.'
+              : 'There are no points inside the crop box.';
           }
           alert(msg);
           return null;
@@ -1868,7 +1871,7 @@
 
       presetButton.addEventListener('click', () => {
         if (!sourceBBox) {
-          alert('먼저 포인트 클라우드를 로딩해 주세요.');
+          alert('Please load a point cloud first.');
           return;
         }
         const preset = buildPresetJSON();
@@ -1879,7 +1882,7 @@
 
       downloadButton.addEventListener('click', () => {
         if (!pointGeometry || !sourceBBox) {
-          alert('먼저 포인트 클라우드를 로딩해 주세요.');
+          alert('Please load a point cloud first.');
           return;
         }
 
