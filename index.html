@@ -337,6 +337,22 @@
 
         <div class="section">
           <div class="section-header">
+            <div class="section-title">Magic Volume</div>
+            <div class="section-note">Shift+클릭: 기준점 선택 · URL: <code>ml</code></div>
+          </div>
+          <div class="field-row">
+            <label for="magicLength">Magic Point Length</label>
+            <input id="magicLength" type="range" min="0.000001" max="1.0" step="0.000001" />
+            <div class="value-label" id="magicLengthVal">-</div>
+          </div>
+          <div class="stat-line">
+            <span>Magic Group Points</span>
+            <span class="value" id="magicCount">-</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
             <div class="section-title">Export</div>
           </div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -384,6 +400,9 @@
       const addPlaneButton = document.getElementById('addPlaneButton');
       const clearPlanesButton = document.getElementById('clearPlanesButton');
       const customPlanesList = document.getElementById('customPlanesList');
+      const magicLengthRange = document.getElementById('magicLength');
+      const magicLengthVal = document.getElementById('magicLengthVal');
+      const magicCountEl = document.getElementById('magicCount');
 
       const DEFAULT_POINT_SIZE = 2.0;
 
@@ -399,12 +418,19 @@
           const v = q.get(k);
           return /^(1|true|on|yes)$/i.test(v);
         };
+        const intParam = (k) => {
+          if (!q.has(k)) return undefined;
+          const v = parseInt(q.get(k), 10);
+          return Number.isFinite(v) ? v : undefined;
+        };
         const cfg = {
           pointSize: num('ps'),
           crop: null,
           invertCrop: undefined,
           showCropBox: undefined,
           showCustomPlanes: undefined,
+          magicLength: num('ml'),
+          magicSeedIndex: intParam('ms'),
           customPlanes: []
         };
         const keys = ['xmin', 'xmax', 'ymin', 'ymax', 'zmin', 'zmax'];
@@ -457,6 +483,8 @@
         invertCrop: initialURL.invertCrop ?? false,
         showCropBox: initialURL.showCropBox ?? true,
         showCustomPlanes: initialURL.showCustomPlanes ?? true,
+        magicLength: initialURL.magicLength ?? 0.05,
+        magicSeedIndex: initialURL.magicSeedIndex ?? null,
         customPlanes: initialURL.customPlanes ?? []
       };
 
@@ -468,6 +496,10 @@
         0xa855f7,
         0x14b8a6
       ];
+
+      let magicIndex = null; // spatial index for Magic Volume
+      let magicJob = null; // incremental BFS job for Magic Volume
+      let magicMask = null; // Uint8Array marking Magic group points
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x000000);
@@ -552,6 +584,13 @@
         if (regionMesh) regionMesh.visible = false;
       }
 
+      function clearMagicState() {
+        magicIndex = null;
+        magicCountEl.textContent = '-';
+        magicJob = null;
+        magicMask = null;
+      }
+
       function ensureRegionHighlightObjects() {
         if (!smallRegionBox) {
           smallRegionBox = new THREE.Box3();
@@ -593,6 +632,18 @@
 
         q.set('cb', params.showCropBox ? '1' : '0');
         q.set('cps', params.showCustomPlanes ? '1' : '0');
+
+        if (params.magicLength != null) {
+          q.set('ml', params.magicLength.toString());
+        } else {
+          q.delete('ml');
+        }
+
+        if (params.magicSeedIndex != null && Number.isFinite(params.magicSeedIndex)) {
+          q.set('ms', String(params.magicSeedIndex));
+        } else {
+          q.delete('ms');
+        }
 
         if (crop.xmin != null && crop.xmax != null &&
             crop.ymin != null && crop.ymax != null &&
@@ -834,6 +885,23 @@
       function onPointerDownForCropPlanes(event) {
         if (!pointCloud) return;
         if (!transformControls) return;
+        if (event.shiftKey) {
+          const rect0 = renderer.domElement.getBoundingClientRect();
+          const x0 = ((event.clientX - rect0.left) / rect0.width) * 2 - 1;
+          const y0 = -((event.clientY - rect0.top) / rect0.height) * 2 + 1;
+          mouse.set(x0, y0);
+          raycaster.setFromCamera(mouse, camera);
+          if (pointCloud) {
+            raycaster.params.Points = raycaster.params.Points || {};
+            raycaster.params.Points.threshold = params.magicLength || 0.01;
+            const hits = raycaster.intersectObject(pointCloud, false);
+            if (hits.length > 0) {
+              const seedIndex = hits[0].index;
+              runMagicVolumeFromSeed(seedIndex);
+            }
+          }
+          return;
+        }
         const rect = renderer.domElement.getBoundingClientRect();
         const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -940,6 +1008,18 @@
           transformControls.detach();
           currentSelectionType = null;
         }
+        updateURLFromState();
+      });
+
+      magicLengthRange.value = params.magicLength.toString();
+      magicLengthVal.textContent = params.magicLength.toExponential(2);
+      magicLengthRange.addEventListener('input', () => {
+        let v = parseFloat(magicLengthRange.value);
+        if (!Number.isFinite(v) || v <= 0) v = 0.00001;
+        params.magicLength = v;
+        magicLengthVal.textContent = params.magicLength.toExponential(2);
+        // spatial index depends on radius
+        magicIndex = null;
         updateURLFromState();
       });
 
@@ -1154,6 +1234,187 @@
         customPlaneMeshes.length = params.customPlanes.length;
       }
 
+      function ensureMagicSpatialIndex(radius) {
+        if (!pointGeometry || radius <= 0) return null;
+        const posAttr = pointGeometry.getAttribute('position');
+        if (!posAttr) return null;
+        if (magicIndex && magicIndex.radius === radius && magicIndex.count === posAttr.count) {
+          return magicIndex;
+        }
+        const cellSize = radius;
+        const inv = 1 / cellSize;
+        const map = new Map();
+        const tmp = new THREE.Vector3();
+        const count = posAttr.count;
+        for (let i = 0; i < count; i++) {
+          tmp.fromBufferAttribute(posAttr, i);
+          const cx = Math.floor(tmp.x * inv);
+          const cy = Math.floor(tmp.y * inv);
+          const cz = Math.floor(tmp.z * inv);
+          const key = cx + ',' + cy + ',' + cz;
+          let bucket = map.get(key);
+          if (!bucket) {
+            bucket = [];
+            map.set(key, bucket);
+          }
+          bucket.push(i);
+        }
+        magicIndex = {
+          radius,
+          radius2: radius * radius,
+          cellSize,
+          inv,
+          map,
+          count
+        };
+        return magicIndex;
+      }
+
+      function stepMagicJob() {
+        if (!magicJob || !magicJob.running) return;
+        const posAttr = pointGeometry && pointGeometry.getAttribute('position');
+        if (!posAttr) {
+          magicJob = null;
+          magicCountEl.textContent = '-';
+          return;
+        }
+        const { radius2, inv, map, visited, queue, group, tmpA, tmpB, totalPoints } = magicJob;
+        const maxIters = 4000;
+        let processed = 0;
+
+        while (queue.length && processed < maxIters) {
+          const i = queue.shift();
+          group.push(i);
+          tmpA.fromBufferAttribute(posAttr, i);
+          const cx = Math.floor(tmpA.x * inv);
+          const cy = Math.floor(tmpA.y * inv);
+          const cz = Math.floor(tmpA.z * inv);
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dz = -1; dz <= 1; dz++) {
+                const key = (cx + dx) + ',' + (cy + dy) + ',' + (cz + dz);
+                const bucket = map.get(key);
+                if (!bucket) continue;
+                for (let k = 0; k < bucket.length; k++) {
+                  const j = bucket[k];
+                  if (visited[j]) continue;
+                  tmpB.fromBufferAttribute(posAttr, j);
+                  const dxp = tmpB.x - tmpA.x;
+                  const dyp = tmpB.y - tmpA.y;
+                  const dzp = tmpB.z - tmpA.z;
+                  const dist2 = dxp * dxp + dyp * dyp + dzp * dzp;
+                  if (dist2 <= radius2) {
+                    visited[j] = 1;
+                    queue.push(j);
+                  }
+                }
+              }
+            }
+          }
+          processed++;
+        }
+
+        const visitedCount = group.length;
+        const pct = totalPoints > 0 ? (visitedCount / totalPoints) * 100 : 0;
+        magicCountEl.textContent =
+          visitedCount.toLocaleString('en-US') +
+          ' / ' +
+          totalPoints.toLocaleString('en-US') +
+          ' (' +
+          pct.toFixed(1) +
+          '%)';
+
+        if (!queue.length) {
+          magicJob.running = false;
+          if (!group.length) {
+            magicCountEl.textContent = '0 / ' + totalPoints.toLocaleString('en-US') + ' (0%)';
+            return;
+          }
+
+          const min = new THREE.Vector3(+Infinity, +Infinity, +Infinity);
+          const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+          const tmp = new THREE.Vector3();
+          for (let t = 0; t < group.length; t++) {
+            const idx = group[t];
+            tmp.fromBufferAttribute(posAttr, idx);
+            min.min(tmp);
+            max.max(tmp);
+          }
+
+          // store exact membership mask for cropping
+          magicMask = visited;
+
+          // Visualize Magic Volume as its own box
+          ensureRegionHighlightObjects();
+          smallRegionBox.set(min, max);
+          smallRegionHelper.visible = true;
+          const cx = (min.x + max.x) / 2;
+          const cy = (min.y + max.y) / 2;
+          const cz = (min.z + max.z) / 2;
+          const sx = Math.max(max.x - min.x, 1e-4);
+          const sy = Math.max(max.y - min.y, 1e-4);
+          const sz = Math.max(max.z - min.z, 1e-4);
+          regionMesh.position.set(cx, cy, cz);
+          regionMesh.scale.set(sx, sy, sz);
+          regionMaterial.clippingPlanes = [];
+          regionMesh.visible = true;
+
+          crop.xmin = min.x;
+          crop.xmax = max.x;
+          crop.ymin = min.y;
+          crop.ymax = max.y;
+          crop.zmin = min.z;
+          crop.zmax = max.z;
+          clampCropToBBox();
+          updateCropPlanesFromState();
+          updateCropInputsFromState();
+          updateCustomPlaneMeshesFromParams();
+          updateURLFromState();
+        }
+      }
+
+      function runMagicVolumeFromSeed(seedIndex) {
+        if (!pointGeometry || !sourceBBox) return;
+        const radius = params.magicLength;
+        if (!Number.isFinite(radius) || radius <= 0) {
+          alert('Magic Point Length 를 먼저 0보다 크게 설정해 주세요.');
+          return;
+        }
+        const posAttr = pointGeometry.getAttribute('position');
+        if (!posAttr) return;
+
+        const index = ensureMagicSpatialIndex(radius);
+        if (!index) return;
+        const { radius2, inv, map } = index;
+
+        const count = posAttr.count;
+        const visited = new Uint8Array(count);
+        const queue = [];
+        const group = [];
+        const tmpA = new THREE.Vector3();
+        const tmpB = new THREE.Vector3();
+
+        queue.push(seedIndex);
+        visited[seedIndex] = 1;
+
+        magicJob = {
+          running: true,
+          radius,
+          radius2,
+          inv,
+          map,
+          visited,
+          queue,
+          group,
+          tmpA,
+          tmpB,
+          totalPoints: count
+        };
+        magicCountEl.textContent = '0 / ' + count.toLocaleString('en-US') + ' (0%)';
+        params.magicSeedIndex = seedIndex;
+        updateURLFromState();
+      }
+
       function recomputeRegionInfoAndHighlight() {
         if (!pointGeometry || !sourceBBox || crop.xmin == null) {
           clearRegionHighlight();
@@ -1328,6 +1589,7 @@
         updateCropPlanesFromState();
         updateCropInputsFromState();
         updateCustomPlaneMeshesFromParams();
+        clearMagicState();
         recomputeRegionInfoAndHighlight();
         updateURLFromState();
       });
@@ -1357,6 +1619,7 @@
           sourceBBox = null;
           hasPointColors = false;
         }
+        clearMagicState();
       }
 
       function onPLYGeometryLoaded(geometry, name) {
@@ -1385,6 +1648,16 @@
         scene.add(points);
         frameCameraToBBox();
         initCropFromBBox();
+
+        // If Magic Volume seed was provided via URL/preset, re-run Magic Volume
+        if (params.magicSeedIndex != null) {
+          const seed = params.magicSeedIndex | 0;
+          if (seed >= 0 && posAttr && seed < posAttr.count) {
+            runMagicVolumeFromSeed(seed);
+          } else {
+            params.magicSeedIndex = null;
+          }
+        }
 
         fileNameEl.textContent = name || '알 수 없음';
         pointCountEl.textContent = count.toLocaleString('en-US');
@@ -1449,6 +1722,8 @@
           pointSize: params.pointSize,
           invertCrop: !!params.invertCrop,
           showCropBox: !!params.showCropBox,
+          magicLength: params.magicLength,
+          magicSeedIndex: params.magicSeedIndex ?? null,
           crop: {
             xmin: crop.xmin,
             xmax: crop.xmax,
@@ -1481,9 +1756,11 @@
         const keptIndices = [];
         const tmp = new THREE.Vector3();
 
+        const useMagic = magicMask && magicMask.length === posAttr.count;
+
         const useCustom = params.customPlanes && params.customPlanes.length > 0;
         let regionInfo = null;
-        if (useCustom) {
+        if (useCustom && !useMagic) {
           regionInfo = lastRegionInfo || recomputeRegionInfoAndHighlight();
         }
 
@@ -1493,6 +1770,12 @@
 
         for (let i = 0; i < posAttr.count; i++) {
           tmp.fromBufferAttribute(posAttr, i);
+          if (useMagic) {
+            const inGroup = !!magicMask[i];
+            const keepMagic = params.invertCrop ? !inGroup : inGroup;
+            if (keepMagic) keptIndices.push(i);
+            continue;
+          }
           const insideBox =
             tmp.x >= crop.xmin && tmp.x <= crop.xmax &&
             tmp.y >= crop.ymin && tmp.y <= crop.ymax &&
@@ -1611,6 +1894,9 @@
 
       function animate() {
         requestAnimationFrame(animate);
+        if (typeof stepMagicJob === 'function') {
+          stepMagicJob();
+        }
         controls.update();
         renderer.render(scene, camera);
       }
