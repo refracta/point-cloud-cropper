@@ -403,7 +403,7 @@
       const magicLengthVal = document.getElementById('magicLengthVal');
       const magicCountEl = document.getElementById('magicCount');
 
-      const DEFAULT_POINT_SIZE = 2.0;
+      const DEFAULT_POINT_SIZE = 1.0e-4;
 
       function readURLConfig() {
         const q = new URLSearchParams(window.location.search);
@@ -482,7 +482,7 @@
         invertCrop: initialURL.invertCrop ?? false,
         showCropBox: initialURL.showCropBox ?? true,
         showCustomPlanes: initialURL.showCustomPlanes ?? true,
-        magicLength: initialURL.magicLength ?? 0.05,
+        magicLength: initialURL.magicLength ?? 0.00076,
         magicSeedIndex: initialURL.magicSeedIndex ?? null,
         customPlanes: initialURL.customPlanes ?? []
       };
